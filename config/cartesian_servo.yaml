@@ -1,0 +1,38 @@
+cartesian_servo_node:
+  ros__parameters:
+    # FR3 机器人 URDF 文件路径
+    # 需要先由 xacro 生成：
+    # ros2 run xacro xacro src/franka_description/robots/fr3/fr3.urdf.xacro > /tmp/fr3.urdf
+    urdf_path: "/home/harry/franka_ros2_ws/src/franka_python/config/urdf/fr3.urdf"
+
+    # 末端执行器坐标系
+    # fr3_hand_tcp 表示机械臂手爪/工具中心点
+    end_effector_frame: "fr3_hand_tcp"
+
+    # 目标末端速度 V_e = [vx, vy, vz, wx, wy, wz]
+    # vx, vy, vz：线速度，单位 m/s
+    # wx, wy, wz：角速度，单位 rad/s
+    target_cartesian_velocity: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # 阻尼因子，用于阻尼最小二乘伪逆
+    # 值越大越稳，但末端速度跟踪精度会下降
+    damping: 0.05
+
+    # 关节速度发布频率，单位 Hz
+    publish_rate_hz: 50.0
+
+    # 控制持续时间，单位 s
+    duration_sec: 1.0
+
+    # true：只打印 q_dot，不真的发给机器人
+    # false：真实发送 q_dot 给机器人
+    dry_run: true
+
+    # 真实 Franka 关节状态 topic
+    joint_state_topic: "/franka/joint_states"
+
+    # 关节速度控制 topic
+    command_topic: "/velocity_command_node/target_velocities"
+
+    # 单个关节最大速度限幅，单位 rad/s
+    max_joint_velocity: 0.05
