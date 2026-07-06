@@ -1,4 +1,7 @@
 # franka_visual_servo_ros2
+
+Charlie Hu
+
 ```
 Python ROS 2 节点
     ↓
