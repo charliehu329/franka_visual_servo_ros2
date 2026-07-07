@@ -33,11 +33,6 @@ class CartesianServoNode(Node):
         self.declare_parameter("urdf_path")
         self.declare_parameter("end_effector_frame")
 
-        # V_e = [vx, vy, vz, wx, wy, wz]
-        # 前三个是末端线速度，单位 m/s
-        # 后三个是末端角速度，单位 rad/s
-        self.declare_parameter("target_cartesian_velocity")
-
         # 控制参数
         self.declare_parameter("damping")
         self.declare_parameter("publish_rate_hz")
@@ -53,11 +48,6 @@ class CartesianServoNode(Node):
         self.urdf_path = self.get_required_parameter("urdf_path")
         self.end_effector_frame = self.get_required_parameter("end_effector_frame")
 
-        self.V_e = np.array(
-            self.get_required_parameter("target_cartesian_velocity"),
-            dtype=float
-        )
-
         self.damping = float(self.get_required_parameter("damping"))
         self.publish_rate_hz = float(self.get_required_parameter("publish_rate_hz"))
         self.duration_sec = float(self.get_required_parameter("duration_sec"))
@@ -69,8 +59,12 @@ class CartesianServoNode(Node):
             self.get_required_parameter("max_joint_velocity")
         )
 
-        if self.V_e.shape[0] != 6:
-            raise ValueError("target_cartesian_velocity must have 6 elements.")
+        # 当前末端速度，由视觉伺服节点通过topic更新
+        # V_e = [vx, vy, vz, wx, wy, wz]
+        self.V_e = np.zeros(
+            6,
+            dtype=float
+        )
 
         # ===== 初始化运动学模型 =====
         self.kinematics = FrankaKinematics(
@@ -85,6 +79,14 @@ class CartesianServoNode(Node):
             JointState,
             self.joint_state_topic,
             self.joint_state_callback,
+            10
+        )
+
+        # ===== 订阅视觉伺服输出的末端速度 =====
+        self.visual_velocity_sub = self.create_subscription(
+            Float64MultiArray,
+            "/visual_servo_velocity",
+            self.visual_velocity_callback,
             10
         )
 
@@ -105,7 +107,7 @@ class CartesianServoNode(Node):
         self.get_logger().info(f"End-effector frame: {self.end_effector_frame}")
         self.get_logger().info(f"Joint state topic: {self.joint_state_topic}")
         self.get_logger().info(f"Command topic: {self.command_topic}")
-        self.get_logger().info(f"Target Cartesian velocity: {self.V_e.tolist()}")
+        self.get_logger().info("Waiting for visual servo velocity.")
         self.get_logger().info(f"Damping: {self.damping}")
         self.get_logger().info(f"Publish rate: {self.publish_rate_hz} Hz")
         self.get_logger().info(f"Duration: {self.duration_sec} s")
@@ -143,6 +145,28 @@ class CartesianServoNode(Node):
         except KeyError as e:
             self.get_logger().warn(f"Missing joint in {self.joint_state_topic}: {e}")
             self.current_q = None
+
+    def visual_velocity_callback(self, msg):
+        """
+        接收视觉伺服输出的末端速度。
+
+        输入：
+            msg.data:
+                [vx, vy, vz, wx, wy, wz]
+        """
+
+        V_e = np.array(
+            msg.data,
+            dtype=float
+        )
+
+        if V_e.shape[0] != 6:
+            self.get_logger().warn(
+                "Visual velocity must have 6 elements."
+            )
+            return
+
+        self.V_e = V_e
 
     def timer_callback(self):
         if self.current_q is None:

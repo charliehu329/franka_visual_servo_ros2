@@ -36,3 +36,14 @@ cartesian_servo_node:
 
     # 单个关节最大速度限幅，单位 rad/s
     max_joint_velocity: 0.05
+    
+    # 相机内参参数
+    fx: 600.0    # x方向焦距，单位 pixel，由相机标定获得
+    fy: 600.0    # y方向焦距，单位 pixel，由相机标定获得
+    cx: 320.0    # 图像光轴中心x坐标，单位 pixel，通常接近图像宽度的一半
+    cy: 240.0    # 图像光轴中心y坐标，单位 pixel，通常接近图像高度的一半
+
+
+    # 目标球参数
+    sphere_radius: 0.02    # 目标绿色小球真实半径，单位 m，用于单目深度估计 Z=fR/r
+    initial_depth: 0.5     # 初始目标距离估计，单位 m，用于深度估计失败时的默认值
