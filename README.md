@@ -1,217 +1,562 @@
+
+
 # Franka Visual Servo ROS2
+
+A ROS 2 based control framework for Franka FR3 robot, focusing on Cartesian velocity control, Jacobian-based velocity mapping, and a modular architecture for future visual servoing applications.
+
+Author: Charlie Hu
 
 ## Overview
 
-This project implements a visual servo control system for the Franka Emika Panda robot using ROS 2. It provides Python ROS 2 nodes that publish target poses, target velocities, and visual errors to control the Franka robot through the `franka_ros2` controller and `libfranka` interface.
+This project provides a modular ROS 2 control framework for the Franka FR3 robot.
+
+The goal is to build a flexible foundation for image-based visual servoing (IBVS) research, where visual information can be converted into robot motion commands through a closed-loop control pipeline.
+
+Current implemented functions:
+
+- ROS 2 integration with Franka robot
+- Cartesian velocity control
+- Joint velocity control through ROS 2 topics
+- Robot Jacobian based velocity mapping
+- Modular controller architecture
+
+The planned visual servo pipeline is:
+
+```text
+Camera
+  ↓
+Target Detection / Feature Extraction
+  ↓
+Visual Servo Control Law
+  ↓
+Cartesian Velocity Command
+  ↓
+Jacobian Velocity Mapping
+  ↓
+Joint Velocity Command
+  ↓
+Franka FR3 Robot
+```
 
 ## System Configuration
 
-- Robot: Franka Emika Panda
+### Hardware
+
+- Robot: Franka Research 3 (FR3)
+- Robot System Version: 5.8.2
+
+### Software
+
+- OS: Ubuntu 24.04
 - ROS 2 Distribution: Jazzy
+- libfranka: 0.17.0
+- franka_ros2: v3.0.0
 - Programming Language: Python
-- Control Framework: ROS 2 Control with `franka_ros2` controller
+
+## Features
+
+### Robot Control
+
+- Cartesian velocity command interface
+- Joint velocity command interface
+- ROS 2 topic based communication
+- Real robot velocity control
+
+### Robot Kinematics
+
+- Forward kinematics interface
+- Jacobian calculation
+- Cartesian velocity to joint velocity mapping
+
+### Visual Servo Framework
+
+The project provides modular components for future integration of:
+
+- Camera interface
+- Target detection
+- Image feature extraction
+- IBVS controller
+- Stereo vision module
 
 ## Project Structure
 
-```
-franka_visual_servo_ros2/
-├── src/                 # Source code folder
-├── build/               # Intermediate build files (auto-generated)
-├── install/             # Installation folder after build
-└── log/                 # Build logs for debugging
-```
-
-## ROS2 Workspace Structure
-
 ```text
-~/franka_ws
-├── src                  # Downloaded source code folder
-├── build                # Intermediate build files during compilation
-├── install              # Build output location
-└── log                  # Compilation logs for debugging
+franka_visual_servo_ros2/
+
+├── franka_python/
+│
+│   ├── cartesian_servo_node.py
+│   │       # ROS 2 node for Cartesian velocity control
+│   │
+│   ├── robot_kinematics.py
+│   │       # Robot kinematics and Jacobian calculation
+│   │
+│   ├── velocity_mapper.py
+│   │       # Cartesian velocity to joint velocity mapping
+│   │
+│   ├── visual_servo_law.py
+│   │       # Visual servo control law module
+│   │
+│   └── safety.py
+│           # Velocity limitation and safety checking
+│
+├── config/
+│       # Configuration files
+│
+├── launch/
+│       # ROS 2 launch files
+│
+├── resource/
+│       # ROS 2 package resources
+│
+├── package.xml
+│       # ROS 2 package description
+│
+└── setup.py
+        # Python package setup
 ```
 
 ## Installation
 
-### Step 1: Connect Computer and Franka Robot
-
-1. Connect the robot via Ethernet cable and configure the network interface.
-2. Access Franka Desk by opening your browser and navigating to the robot IP address, for example:
+### 1. Clone Repository
 
 ```bash
-https://172.16.0.2/desk/
+git clone https://github.com/charliehu329/franka_visual_servo_ros2.git
+cd franka_visual_servo_ros2
 ```
 
-3. In Franka Desk, perform the following:
+### 2. Build ROS 2 Package
 
-```text
-1. Power on the robot
-2. Unlock the robot
-3. Activate FCI to enable robot control
-```
-
-Verify the connection by pinging the robot IP:
-
-```bash
-ping 172.16.0.2
-```
-
-### Step 2: Control Franka with ROS
-
-1. Place the source code in the `src` folder.
-2. Build the workspace:
-
-```bash
-colcon build
-```
-
-3. Source the setup script:
-
-```bash
-source install/setup.bash
-```
-
-4. Launch ROS nodes, controllers, and hardware interfaces:
-
-```bash
-ros2 launch <launch_file>
-```
-
-## Usage
-
-### Setup Environment
-
-Open a new terminal and enter the Franka ROS 2 workspace:
-
-```bash
-cd /home/harry/franka_ros2_ws
-```
-
-Load the ROS 2 Jazzy environment:
+Source ROS 2 environment:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 ```
 
-Load the Franka workspace environment:
-
-```bash
-source ~/franka_ros2_ws/install/setup.bash
-```
-
-If you have modified code, rebuild the workspace:
+Build package:
 
 ```bash
 colcon build --symlink-install
 ```
 
-Or build a single package:
-
-```bash
-colcon build --packages-select <YOUR_PACKAGE>
-```
-
-Verify the environment is loaded correctly by listing Franka ROS 2 packages:
-
-```bash
-ros2 pkg list | grep franka
-```
-
-Expected output includes:
-
-```bash
-franka_bringup
-franka_description
-franka_example_controllers
-franka_hardware
-franka_msgs
-franka_robot_state_broadcaster
-franka_semantic_components
-franka_velocity_ctrl
-```
-
-### Launch Controllers
-
-In terminal 1, launch the controller in topic mode to connect to Franka and start the controller:
-
-```bash
-ros2 launch franka_velocity_ctrl fr3_velocity.launch.py \
-    robot_ip:=172.16.0.2 \
-    mode:=topic
-```
-
-Check if the controller is active:
-
-```bash
-ros2 control list_controllers
-```
-
-### Publish Velocity Commands
-
-In terminal 2, run the Python node that publishes velocity commands:
-
-```bash
-ros2 run franka_python send_joint_velocity
-```
-
-Alternatively, publish velocity commands directly via topic:
-
-```bash
-ros2 topic pub /velocity_command_node/target_velocities \
-    std_msgs/msg/Float64MultiArray \
-    "data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]"
-```
-
-Example with a non-zero velocity on the last joint:
-
-```bash
-ros2 topic pub /velocity_command_node/target_velocities \
-    std_msgs/msg/Float64MultiArray \
-    "data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.02]"
-```
-
-### Build and Run the Python Package
-
-If you modify the Python package, rebuild it:
+For development, build only this package:
 
 ```bash
 colcon build --packages-select franka_python --symlink-install
 ```
 
-Run the node again:
+Source workspace:
+
+```bash
+source install/setup.bash
+```
+
+Check ROS 2 packages:
+
+```bash
+ros2 pkg list | grep franka
+```
+
+## Usage
+
+### 1. Connect Franka Robot
+
+Connect the computer and Franka controller through Ethernet.
+
+Check robot connection:
+
+```bash
+ping 172.16.0.2
+```
+
+Open Franka Desk:
+
+```text
+https://172.16.0.2
+```
+
+Before running ROS 2 control:
+
+1. Power on the robot
+2. Unlock the robot
+3. Activate FCI mode in Franka Desk
+
+### 2. Start Franka ROS 2 Controller
+
+Open Terminal 1:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/franka_ros2_ws/install/setup.bash
+```
+
+Launch controller:
+
+```bash
+ros2 launch franka_velocity_ctrl fr3_velocity.launch.py \
+robot_ip:=172.16.0.2 \
+mode:=topic
+```
+
+Check controller status:
+
+```bash
+ros2 control list_controllers
+```
+
+### 3. Send Velocity Commands
+
+Open Terminal 2:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/franka_ros2_ws/install/setup.bash
+```
+
+Run velocity command node:
 
 ```bash
 ros2 run franka_python send_joint_velocity
 ```
 
+Publish velocity command directly:
+
+```bash
+ros2 topic pub /velocity_command_node/target_velocities \
+std_msgs/msg/Float64MultiArray \
+"data: [0.0,0.0,0.0,0.0,0.0,0.0,0.0]"
+```
+
+Example: move joint 7:
+
+```bash
+ros2 topic pub /velocity_command_node/target_velocities \
+std_msgs/msg/Float64MultiArray \
+"data: [0.0,0.0,0.0,0.0,0.0,0.0,-0.02]"
+```
+
 ## Control Architecture
 
+The framework is divided into several independent modules.
+
+### Visual Servo Law
+
+Input:
+
+```text
+Image feature error
 ```
-Python ROS 2 Node
-    ↓
-Publishes target pose / target velocity / visual error
-    ↓
-franka_ros2 controller
-    ↓
-libfranka
-    ↓
-Franka Robot
+
+Output:
+
+```text
+Desired Cartesian velocity
 ```
+
+### Velocity Mapping
+
+Cartesian velocity is converted into joint velocity using robot Jacobian:
+
+```text
+Cartesian Velocity
+        ↓
+Jacobian Mapping
+        ↓
+Joint Velocity
+```
+
+### Safety Module
+
+Responsible for:
+
+- Velocity limitation
+- Joint constraints
+- Robot safety protection
 
 ## Development Status
 
-- Core visual servoing nodes implemented in Python.
-- Integration with `franka_ros2` controller validated.
-- Velocity control tested via topic publishing.
+### Completed
+
+- ROS 2 package framework
+- Franka FR3 velocity control
+- Cartesian velocity interface
+- Joint velocity command interface
+- Jacobian based velocity mapping
+- Modular control architecture
+
+### Future Work
+
+- Camera interface
+- Target detection
+- Image feature extraction
+- Closed-loop IBVS controller
+- Stereo vision based visual servoing
+- Real-time experiments
 
 ## Troubleshooting
 
-- Ensure the robot IP and network configuration are correct.
-- Confirm Franka Desk activation of FCI.
-- Verify ROS 2 environment sourcing order.
-- Check controller status with `ros2 control list_controllers`.
-- Use `ros2 topic echo` to monitor topics for expected messages.
+### Robot cannot be controlled
+
+Check:
+
+```bash
+ping 172.16.0.2
+```
+
+Make sure:
+
+- Robot is powered on
+- Ethernet connection is correct
+- FCI mode is activated
+
+### ROS 2 package cannot be found
+
+Reload workspace:
+
+```bash
+source install/setup.bash
+```
+
+Check package:
+
+```bash
+ros2 pkg list | grep franka
+```
+
+### Controller is not active
+
+Check:
+
+```bash
+ros2 control list_controllers
+```
+
+## Acknowledgements
+
+This project is developed based on the open-source Franka ROS 2 ecosystem.
+
+The original robot interface and low-level communication are provided by:
+
+- Franka Robotics
+- libfranka
+- franka_ros2
+
+This repository extends the existing framework with additional modules for:
+
+- Cartesian velocity control
+- Joint velocity control interface
+- Jacobian-based velocity mapping
+- Visual servo control architecture
+
+Please refer to the original repositories for the official robot interface implementation and corresponding licenses.
 
 ## License
 
 MIT License
+
+# Franka Visual Servo ROS2 中文说明
+
+## 项目简介
+
+本项目基于 ROS 2 构建 Franka FR3 机械臂视觉伺服控制框架。
+
+项目目标是在已有 Franka ROS 2 控制生态基础上，建立一个模块化的机器人控制框架，为后续图像视觉伺服（IBVS）、目标检测以及双目视觉控制提供基础。
+
+当前已经实现：
+
+- Franka FR3 ROS 2 控制接口
+- 笛卡尔速度控制
+- 关节速度控制
+- 基于机器人雅可比矩阵的速度映射
+- 模块化视觉伺服控制框架
+
+## 系统配置
+
+### 硬件
+
+- 机器人：Franka Research 3 (FR3)
+- Robot System Version：5.8.2
+
+### 软件
+
+- Ubuntu 24.04
+- ROS 2 Jazzy
+- libfranka 0.17.0
+- franka_ros2 v3.0.0
+- Python
+
+## 项目结构
+
+```text
+franka_visual_servo_ros2/
+
+├── franka_python/
+│   ├── cartesian_servo_node.py
+│   │       # 笛卡尔速度控制 ROS 2 节点
+│   ├── robot_kinematics.py
+│   │       # 机器人运动学和雅可比计算
+│   ├── velocity_mapper.py
+│   │       # 笛卡尔速度到关节速度映射
+│   ├── visual_servo_law.py
+│   │       # 视觉伺服控制律
+│   └── safety.py
+│           # 安全限制和速度约束
+```
+
+## 安装方法
+
+下载项目：
+
+```bash
+git clone https://github.com/charliehu329/franka_visual_servo_ros2.git
+cd franka_visual_servo_ros2
+```
+
+编译：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+```
+
+## 使用方法
+
+### 1. 连接机器人
+
+通过 Ethernet 连接电脑和 Franka 控制柜。
+
+检查网络：
+
+```bash
+ping 172.16.0.2
+```
+
+打开 Franka Desk：
+
+```text
+https://172.16.0.2
+```
+
+运行控制前：
+
+1. 打开机器人电源
+2. 解锁机器人
+3. 在 Franka Desk 中开启 FCI 模式
+
+### 2. 启动 ROS 2 控制器
+
+终端 1：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/franka_ros2_ws/install/setup.bash
+
+ros2 launch franka_velocity_ctrl fr3_velocity.launch.py \
+robot_ip:=172.16.0.2 \
+mode:=topic
+```
+
+查看控制器状态：
+
+```bash
+ros2 control list_controllers
+```
+
+### 3. 发布速度指令
+
+终端 2：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/franka_ros2_ws/install/setup.bash
+```
+
+运行速度控制节点：
+
+```bash
+ros2 run franka_python send_joint_velocity
+```
+
+## 控制框架
+
+整体控制流程：
+
+```text
+相机
+ ↓
+目标检测 / 图像特征提取
+ ↓
+视觉伺服控制律
+ ↓
+末端笛卡尔速度
+ ↓
+雅可比速度映射
+ ↓
+关节速度
+ ↓
+Franka FR3机器人
+```
+
+主要模块：
+
+### 视觉伺服控制律
+
+输入：
+
+- 图像特征误差
+
+输出：
+
+- 期望末端速度
+
+### 速度映射模块
+
+负责：
+
+- Cartesian velocity 到 joint velocity 转换
+- 基于 Jacobian 的运动映射
+
+### 安全模块
+
+负责：
+
+- 速度限制
+- 关节约束
+- 机器人安全保护
+
+## 开发状态
+
+已完成：
+
+- ROS 2 软件框架
+- Franka FR3 速度控制
+- 笛卡尔速度接口
+- 关节速度接口
+- 雅可比速度映射
+
+未来计划：
+
+- 相机接口
+- 目标检测
+- 图像特征提取
+- 闭环 IBVS 控制
+- 双目视觉伺服
+- 实时视觉伺服实验
+
+## 致谢
+
+本项目基于 Franka Robotics 提供的开源 ROS 2 控制生态开发。
+
+底层机器人接口主要来自：
+
+- libfranka
+- franka_ros2
+
+本项目主要扩展内容包括：
+
+- 机器人速度控制模块
+- 雅可比速度映射模块
+- 面向视觉伺服的控制框架
+
+外部开源组件版权和许可证保持原项目规定。
