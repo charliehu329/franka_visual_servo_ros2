@@ -30,7 +30,7 @@ cartesian_servo_node:
     visual_velocity_timeout_sec: 0.2
 
     # 末端执行器到相机的变换矩阵
-    T_end_effector_camera: [
+    : [
       1.0, 0.0, 0.0, 0.0,
       0.0, 1.0, 0.0, 0.0,
       0.0, 0.0, 1.0, 0.0,
