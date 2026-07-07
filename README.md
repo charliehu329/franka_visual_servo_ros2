@@ -172,7 +172,7 @@ ping 172.16.0.2
 Open Franka Desk:
 
 ```text
-https://172.16.0.2
+https://172.16.0.2/desk
 ```
 
 Before running ROS 2 control:
@@ -435,7 +435,7 @@ ping 172.16.0.2
 打开 Franka Desk：
 
 ```text
-https://172.16.0.2
+https://172.16.0.2/desk
 ```
 
 运行控制前：
