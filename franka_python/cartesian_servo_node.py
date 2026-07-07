@@ -32,6 +32,9 @@ class CartesianServoNode(Node):
         # 运动学模型相关参数
         self.declare_parameter("urdf_path")
         self.declare_parameter("end_effector_frame")
+        self.declare_parameter(
+                "T_end_effector_camera"
+            )
 
         # 控制参数
         self.declare_parameter("damping")
@@ -47,6 +50,24 @@ class CartesianServoNode(Node):
         # ===== 读取必要参数 =====
         self.urdf_path = self.get_required_parameter("urdf_path")
         self.end_effector_frame = self.get_required_parameter("end_effector_frame")
+        
+        T_end_effector_camera = np.array(
+            self.get_required_parameter(
+                "T_end_effector_camera"
+            ),
+            dtype=float
+        )
+
+        if T_end_effector_camera.size != 16:
+            raise ValueError(
+                "T_end_effector_camera must contain 16 elements."
+            )
+
+        self.T_end_effector_camera = (
+            T_end_effector_camera.reshape(4, 4)
+        )
+
+
 
         self.damping = float(self.get_required_parameter("damping"))
         self.publish_rate_hz = float(self.get_required_parameter("publish_rate_hz"))
@@ -146,27 +167,99 @@ class CartesianServoNode(Node):
             self.get_logger().warn(f"Missing joint in {self.joint_state_topic}: {e}")
             self.current_q = None
 
+
     def visual_velocity_callback(self, msg):
         """
-        接收视觉伺服输出的末端速度。
+        接收视觉伺服输出的相机速度V_c
 
         输入：
             msg.data:
-                [vx, vy, vz, wx, wy, wz]
+                V_c = [vx, vy, vz, wx, wy, wz]
+                速度在相机坐标系下表达。
         """
 
-        V_e = np.array(
+        V_c = np.array(
             msg.data,
             dtype=float
         )
 
-        if V_e.shape[0] != 6:
+        if V_c.shape != (6,):
             self.get_logger().warn(
                 "Visual velocity must have 6 elements."
             )
             return
 
-        self.V_e = V_e
+        self.V_e = (
+            self.camera_velocity_to_end_effector_velocity(
+                V_c
+            )
+        )
+
+
+
+    @staticmethod
+    def skew(vector):
+        """
+        将三维向量转换为反对称矩阵。
+        """
+
+        x, y, z = vector
+
+        return np.array(
+            [
+                [0.0, -z, y],
+                [z, 0.0, -x],
+                [-y, x, 0.0]
+            ],
+            dtype=float
+        )
+
+
+    def camera_velocity_to_end_effector_velocity(
+        self,
+        V_c
+    ):
+        """
+        将相机坐标系下的速度V_c转换为
+        末端执行器坐标系下的速度V_e。
+
+        输入：
+            V_c:
+                [vx, vy, vz, wx, wy, wz]
+
+        输出：
+            V_e:
+                [vx, vy, vz, wx, wy, wz]
+        """
+
+        R_e_c = self.T_end_effector_camera[
+            :3,
+            :3
+        ]
+
+        t_e_c = self.T_end_effector_camera[
+            :3,
+            3
+        ]
+
+        adjoint_e_c = np.zeros(
+            (6, 6),
+            dtype=float
+        )
+
+        # 当前速度排列方式：
+        # [线速度, 角速度]
+        adjoint_e_c[:3, :3] = R_e_c
+
+        adjoint_e_c[:3, 3:] = (
+            self.skew(t_e_c) @ R_e_c
+        )
+
+        adjoint_e_c[3:, 3:] = R_e_c
+
+        V_e = adjoint_e_c @ V_c
+
+        return V_e
 
     def timer_callback(self):
         if self.current_q is None:

@@ -1,49 +1,64 @@
 cartesian_servo_node:
   ros__parameters:
-    # FR3 机器人 URDF 文件路径
-    # 需要先由 xacro 生成：
-    # ros2 run xacro xacro src/franka_description/robots/fr3/fr3.urdf.xacro > /tmp/fr3.urdf
+    # FR3机器人URDF
     urdf_path: "/home/harry/franka_ros2_ws/src/franka_python/config/urdf/fr3.urdf"
 
     # 末端执行器坐标系
-    # fr3_hand_tcp 表示机械臂手爪/工具中心点
     end_effector_frame: "fr3_hand_tcp"
 
-    # 目标末端速度 V_e = [vx, vy, vz, wx, wy, wz]
-    # vx, vy, vz：线速度，单位 m/s
-    # wx, wy, wz：角速度，单位 rad/s
-    target_cartesian_velocity: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-
-    # 阻尼因子，用于阻尼最小二乘伪逆
-    # 值越大越稳，但末端速度跟踪精度会下降
+    # 阻尼最小二乘参数
     damping: 0.05
 
-    # 关节速度发布频率，单位 Hz
+    # 控制频率
     publish_rate_hz: 50.0
 
-    # 控制持续时间，单位 s
-    duration_sec: 1.0
+    # 0.0表示持续运行
+    duration_sec: 0.0
 
-    # true：只打印 q_dot，不真的发给机器人
-    # false：真实发送 q_dot 给机器人
+    # true只计算和打印，false真实发送
     dry_run: true
 
-    # 真实 Franka 关节状态 topic
+    # ROS topics
     joint_state_topic: "/franka/joint_states"
-
-    # 关节速度控制 topic
     command_topic: "/velocity_command_node/target_velocities"
+    visual_velocity_topic: "/visual_servo_velocity"
 
-    # 单个关节最大速度限幅，单位 rad/s
+    # 单关节速度限幅
     max_joint_velocity: 0.05
-    
-    # 相机内参参数
-    fx: 600.0    # x方向焦距，单位 pixel，由相机标定获得
-    fy: 600.0    # y方向焦距，单位 pixel，由相机标定获得
-    cx: 320.0    # 图像光轴中心x坐标，单位 pixel，通常接近图像宽度的一半
-    cy: 240.0    # 图像光轴中心y坐标，单位 pixel，通常接近图像高度的一半
 
+    # 视觉速度超时时间
+    visual_velocity_timeout_sec: 0.2
+
+    # 末端执行器到相机的变换矩阵
+    T_end_effector_camera: [
+      1.0, 0.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, 0.0, 1.0
+    ]
+
+
+visual_servo_law:
+  ros__parameters:
+    # 相机内参
+    fx: 891.1
+    fy: 879.2
+    cx: 266.8
+    cy: 200.8
 
     # 目标球参数
-    sphere_radius: 0.02    # 目标绿色小球真实半径，单位 m，用于单目深度估计 Z=fR/r
-    initial_depth: 0.5     # 初始目标距离估计，单位 m，用于深度估计失败时的默认值
+    sphere_radius: 0.01
+
+    # 异常情况下的备用深度
+    initial_depth: 0.5
+
+    # 期望视觉特征
+    desired_u: 320.0
+    desired_v: 240.0
+    desired_radius: 30.0
+
+    # IBVS增益，控制误差转化成速度的比例，大小影响收敛速度和稳定性
+    lambda_gain: 0.001
+
+    # 输出topic
+    visual_velocity_topic: "/visual_servo_velocity"

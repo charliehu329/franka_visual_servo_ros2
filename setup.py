@@ -38,6 +38,7 @@ setup(
         'console_scripts': [
             'send_joint_velocity = franka_python.send_joint_velocity:main',
             'cartesian_servo_node = franka_python.cartesian_servo_node:main',
+            "visual_servo_law = franka_python.visual_servo_law:main",
         ],
     },
 )
