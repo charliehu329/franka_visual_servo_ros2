@@ -2,6 +2,8 @@
 """
 visual_servo_law.py
 
+第501行修改：Z=0.5，避免使用检测器输出的Z，防止检测器输出异常值导致伺服速度异常。
+
 概括：创建VisualServoLaw节点，在节点中创建GreenBallDetector实例。
 输入RGB图像后，检测器输出视觉特征 [u, v, r, Z]，
 视觉伺服律根据当前特征和期望特征计算相机速度 V_c，
@@ -85,6 +87,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
+import cv2
 
 from franka_python.vision.camera import USBCamera
 from franka_python.vision.green_ball_detector import GreenBallDetector
@@ -129,6 +132,11 @@ class VisualServoLaw(Node):
         self.declare_parameter("desired_v", 240.0)
         self.declare_parameter("desired_radius", 30.0)
 
+        # 绿色目标HSV阈值
+        # 具体数值必须从YAML或命令行传入
+        self.declare_parameter("hsv_lower")
+        self.declare_parameter("hsv_upper")
+
         # 打开USB摄像头
         # camera_index=3对应/dev/video3
         self.camera = USBCamera(
@@ -140,6 +148,17 @@ class VisualServoLaw(Node):
 
         # IBVS参数
         self.declare_parameter("lambda_gain", 0.001)
+
+        # 未检测到目标时的零速度连发参数
+        # 默认立即发送1次，再以0.01 s间隔补发，共发送5次
+        self.declare_parameter(
+            "zero_velocity_repeat_count",
+            5
+        )
+        self.declare_parameter(
+            "zero_velocity_repeat_interval_sec",
+            0.01
+        )
 
         # ROS topic
         self.declare_parameter(
@@ -175,11 +194,55 @@ class VisualServoLaw(Node):
             ).value
         )
 
+        self.hsv_lower = list(
+            self.get_required_parameter(
+                "hsv_lower"
+            )
+        )
+
+        self.hsv_upper = list(
+            self.get_required_parameter(
+                "hsv_upper"
+            )
+        )
+
+        if (
+            len(self.hsv_lower) != 3
+            or len(self.hsv_upper) != 3
+        ):
+            raise ValueError(
+                "hsv_lower and hsv_upper must contain "
+                "three values: [H, S, V]."
+            )
+
         self.lambda_gain = float(
             self.get_parameter(
                 "lambda_gain"
             ).value
         )
+
+        self.zero_velocity_repeat_count = int(
+            self.get_parameter(
+                "zero_velocity_repeat_count"
+            ).value
+        )
+
+        self.zero_velocity_repeat_interval_sec = float(
+            self.get_parameter(
+                "zero_velocity_repeat_interval_sec"
+            ).value
+        )
+
+        if self.zero_velocity_repeat_count <= 0:
+            raise ValueError(
+                "zero_velocity_repeat_count must be positive."
+            )
+
+        if self.zero_velocity_repeat_interval_sec <= 0.0:
+            raise ValueError(
+                "zero_velocity_repeat_interval_sec "
+                "must be positive."
+            )
 
         self.desired_feature = np.array(
             [
@@ -215,8 +278,8 @@ class VisualServoLaw(Node):
             fy=self.fy,
             sphere_radius=sphere_radius,
             initial_depth=initial_depth,
-            hsv_lower=[30, 20, 20],
-            hsv_upper=[90, 255, 255]  # H：色相，决定是什么颜色,S：饱和度，决定颜色有多鲜艳,V：亮度，决定颜色有多亮
+            hsv_lower=self.hsv_lower,
+            hsv_upper=self.hsv_upper
         )
         """
         H = 0       红色
@@ -234,7 +297,7 @@ class VisualServoLaw(Node):
         V 较小：暗绿色
         V 较大：亮绿色
         V = 255：非常亮
-        
+
         """
         
 
@@ -246,18 +309,56 @@ class VisualServoLaw(Node):
             10
         )
 
+        # 零速度补发状态。
+        # remaining表示还需要由定时器补发多少次零速度。
+        self.zero_velocity_remaining = 0
+
+        # 当前安全停止原因，用于避免同一故障反复打印警告。
+        self.safe_stop_reason = None
+
+        # 独立零速度补发定时器。
+        # 定时器一直存在，但remaining为0时不会发布消息。
+        self.zero_velocity_timer = self.create_timer(
+            self.zero_velocity_repeat_interval_sec,
+            self.zero_velocity_timer_callback
+        )
+
         self.get_logger().info(
             "VisualServoLaw started. "
             f"Desired feature: "
             f"{self.desired_feature.tolist()}"
         )
 
+        self.get_logger().info(
+            "Zero-velocity burst: "
+            f"{self.zero_velocity_repeat_count} messages, "
+            f"interval "
+            f"{self.zero_velocity_repeat_interval_sec:.3f} s."
+        )
 
         # 每秒读取约30帧图像
         self.camera_timer = self.create_timer(
             1.0 / 30.0,
             self.camera_callback
         )
+
+
+    def get_required_parameter(self, name):
+        """
+        读取必须由YAML或命令行提供的参数。
+
+        如果参数没有设置，则直接报错。
+        """
+
+        param = self.get_parameter(name)
+
+        if param.type_ == rclpy.Parameter.Type.NOT_SET:
+            raise ValueError(
+                f"Required parameter '{name}' is not set. "
+                f"Please provide it in YAML or command line."
+            )
+
+        return param.value
 
     def camera_callback(self):
         """
@@ -267,7 +368,9 @@ class VisualServoLaw(Node):
         image = self.camera.read()
 
         if image is None:
-            self.publish_zero_velocity()
+            self.request_zero_velocity_burst(
+                "Camera image is unavailable."
+            )
             return
 
         self.process_image(image)
@@ -278,27 +381,124 @@ class VisualServoLaw(Node):
         image
     ):
         """
-        从图像中检测绿色小球，并计算视觉伺服速度。
-
-        输入：
-            image:
-                RGB相机图像。
-
-        输出：
-            V_c:
-                检测成功时返回6维相机速度。
-
-            None:
-                未检测到绿色小球时返回None。
+        从图像中检测绿色小球、显示检测结果，
+        并计算视觉伺服速度。
         """
 
         current_feature = self.detector.detect(
             image
         )
 
-        # 未检测到目标时发布零速度
+        # 复制一份图像，只在复制图像上绘制，
+        # 避免影响检测器使用的原始图像。
+        display_image = image.copy()
+
         if current_feature is None:
+            # 没有检测到目标时显示文字
+            cv2.putText(
+                display_image,
+                "Target not detected",
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 0, 255),
+                2
+            )
+
+            # 绘制期望目标中心
+            desired_u = int(
+                round(self.desired_feature[0])
+            )
+            desired_v = int(
+                round(self.desired_feature[1])
+            )
+
+            cv2.drawMarker(
+                display_image,
+                (desired_u, desired_v),
+                (255, 0, 0),
+                markerType=cv2.MARKER_CROSS,
+                markerSize=25,
+                thickness=2
+            )
+
+            # 显示图像
+            cv2.imshow(
+                "Visual Servo",
+                display_image
+            )
+            cv2.waitKey(1)
+
+            self.request_zero_velocity_burst(
+                "Target object was not detected."
+            )
+
+            return None
+
+        # 提取检测结果
+        u = int(round(current_feature[0]))
+        v = int(round(current_feature[1]))
+        r = int(round(current_feature[2]))
+        Z = float(current_feature[3])
+
+        # 绘制检测到的小球轮廓
+        cv2.circle(
+            display_image,
+            (u, v),
+            r,
+            (0, 255, 0),
+            2
+        )
+
+        # 绘制检测到的小球中心
+        cv2.circle(
+            display_image,
+            (u, v),
+            4,
+            (0, 0, 255),
+            -1
+        )
+
+        # 绘制期望位置
+        desired_u = int(
+            round(self.desired_feature[0])
+        )
+        desired_v = int(
+            round(self.desired_feature[1])
+        )
+
+        cv2.drawMarker(
+            display_image,
+            (desired_u, desired_v),
+            (255, 0, 0),
+            markerType=cv2.MARKER_CROSS,
+            markerSize=25,
+            thickness=2
+        )
+
+        # 显示当前检测结果
+        cv2.putText(
+            display_image,
+            f"u={u}, v={v}, r={r}, Z={Z:.3f} m",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2
+        )
+
+        cv2.imshow(
+            "Visual Servo",
+            display_image
+        )
+
+        # imshow后必须调用waitKey，
+        # 否则窗口通常不会正常刷新。
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord("q"):
             self.publish_zero_velocity()
+            rclpy.shutdown()
             return None
 
         return self.compute_velocity(
@@ -429,7 +629,9 @@ class VisualServoLaw(Node):
             self.get_logger().error(
                 "Detector output must be [u, v, r, Z]."
             )
-            self.publish_zero_velocity()
+            self.request_zero_velocity_burst(
+                "Detector output has an invalid shape."
+            )
             return np.zeros(6, dtype=float)
 
         Z = current_feature[3]
@@ -444,7 +646,9 @@ class VisualServoLaw(Node):
                 "Invalid visual feature. "
                 "Publishing zero velocity."
             )
-            self.publish_zero_velocity()
+            self.request_zero_velocity_burst(
+                "Visual feature contains invalid values."
+            )
             return np.zeros(6, dtype=float)
 
         error = self.compute_error(
@@ -454,7 +658,7 @@ class VisualServoLaw(Node):
 
         Ls = self.interaction_matrix(
             current_feature,
-            Z
+            Z=0.5
         )
 
         # 当前版本只使用u、v误差
@@ -471,8 +675,23 @@ class VisualServoLaw(Node):
                 "Invalid IBVS velocity. "
                 "Publishing zero velocity."
             )
-            self.publish_zero_velocity()
+            self.request_zero_velocity_burst(
+                "IBVS velocity contains invalid values."
+            )
             return np.zeros(6, dtype=float)
+
+        # 目标刚刚恢复时，如果上一轮零速度还没有补发完，
+        # 不允许非零速度与零速度交叉发布。
+        # 等补发完成后，下一帧有效目标才能恢复控制。
+        if self.zero_velocity_remaining > 0:
+            return np.zeros(6, dtype=float)
+
+        if self.safe_stop_reason is not None:
+            self.get_logger().info(
+                "Valid target recovered. "
+                "Visual servo control resumed."
+            )
+            self.safe_stop_reason = None
 
         msg = Float64MultiArray()
         msg.data = V_c.tolist()
@@ -481,15 +700,71 @@ class VisualServoLaw(Node):
 
         return V_c
 
-    def publish_zero_velocity(self):
+    def request_zero_velocity_burst(
+        self,
+        reason
+    ):
         """
-        发布6维零速度。
+        请求连续发送多次6维零速度。
+
+        操作：
+            1. 立即发送一次零速度。
+            2. 设置补发计数器。
+            3. 由zero_velocity_timer按固定间隔继续补发。
+            4. 相同故障持续发生时，重新补满计数器，
+               从而持续发送零速度。
+        """
+
+        if reason != self.safe_stop_reason:
+            self.get_logger().warn(
+                "Safety stop: "
+                f"{reason} "
+                "Sending repeated zero velocity."
+            )
+            self.safe_stop_reason = reason
+
+        # 每次再次检测到故障时都补满发送次数。
+        # 这样目标持续丢失期间会持续发送零速度。
+        self.zero_velocity_remaining = max(
+            self.zero_velocity_remaining,
+            self.zero_velocity_repeat_count
+        )
+
+        # 立即发送第一条，不等待定时器。
+        self.publish_zero_velocity_once()
+        self.zero_velocity_remaining -= 1
+
+    def zero_velocity_timer_callback(self):
+        """
+        按固定时间间隔补发零速度。
+        """
+
+        if self.zero_velocity_remaining <= 0:
+            return
+
+        self.publish_zero_velocity_once()
+        self.zero_velocity_remaining -= 1
+
+    def publish_zero_velocity_once(self):
+        """
+        发布一次6维零速度。
         """
 
         msg = Float64MultiArray()
         msg.data = [0.0] * 6
 
         self.velocity_publisher.publish(msg)
+
+    def publish_zero_velocity(self):
+        """
+        兼容原有调用接口。
+
+        调用后启动一次完整的零速度连发过程。
+        """
+
+        self.request_zero_velocity_burst(
+            "Zero velocity was explicitly requested."
+        )
 
 
 def main(args=None):

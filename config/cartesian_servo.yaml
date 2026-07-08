@@ -16,7 +16,7 @@ cartesian_servo_node:
     duration_sec: 0.0
 
     # true只计算和打印，false真实发送
-    dry_run: true
+    dry_run: false
 
     # ROS topics
     joint_state_topic: "/franka/joint_states"
@@ -36,6 +36,11 @@ cartesian_servo_node:
       0.0, 0.0, 1.0, 0.0,
       0.0, 0.0, 0.0, 1.0
     ]
+
+    visual_velocity_timeout_sec: 0.1
+    joint_state_timeout_sec: 0.1
+
+
 
 
 visual_servo_law:
@@ -58,7 +63,12 @@ visual_servo_law:
     desired_radius: 30.0
 
     # IBVS增益，控制误差转化成速度的比例，大小影响收敛速度和稳定性
-    lambda_gain: 0.001
+    lambda_gain: -1.0
 
     # 输出topic
     visual_velocity_topic: "/visual_servo_velocity"
+
+
+    # HSV颜色范围
+    hsv_lower: [50, 10, 44]
+    hsv_upper: [90, 251, 255]
