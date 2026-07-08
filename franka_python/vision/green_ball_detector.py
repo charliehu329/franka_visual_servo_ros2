@@ -261,25 +261,12 @@ class GreenBallDetector:
         计算轮廓的圆形形状得分。
 
         形状得分综合考虑：
+        1. circularity：轮廓圆度。
+        2. circle_fill_ratio：轮廓面积与最小外接圆面积的比值。
+        3. aspect_ratio_score：外接矩形宽高是否接近。
+        4. solidity：轮廓面积与凸包面积的比值。
 
-        1. circularity：
-           轮廓圆度。
-
-        2. circle_fill_ratio：
-           轮廓面积与最小外接圆面积的比值。
-
-        3. aspect_ratio_score：
-           外接矩形宽高是否接近。
-
-        4. solidity：
-           轮廓面积与凸包面积的比值。
-
-        输出：
-            shape_score:
-                形状得分，范围约为 0～1。
-
-            shape_information:
-                形状相关参数。
+        【伺服优化】：最终输出的 (u, v) 和 radius 使用图像矩和面积积分计算，以提供极高平滑度的控制信号。
         """
 
         area = cv2.contourArea(
@@ -297,52 +284,35 @@ class GreenBallDetector:
         ):
             return 0.0, None
 
-        # 圆度：
-        # 理想圆形接近 1
+        # 1. 计算形状得分（用于过滤干扰）
         circularity = (
             4.0 *
             np.pi *
             area /
             (perimeter ** 2)
         )
+        circularity = float(np.clip(circularity, 0.0, 1.0))
 
-        circularity = float(
-            np.clip(
-                circularity,
-                0.0,
-                1.0
-            )
-        )
-
-        # 最小外接圆
-        (center_x, center_y), radius = (
+        # 计算最小外接圆（仅用于形态学评分，不作为最终坐标输出）
+        (enc_x, enc_y), enc_radius = (
             cv2.minEnclosingCircle(
                 contour
             )
         )
 
-        if radius <= 0.0:
+        if enc_radius <= 0.0:
             return 0.0, None
 
         circle_area = (
             np.pi *
-            radius *
-            radius
+            enc_radius *
+            enc_radius
         )
-
-        # 轮廓在外接圆内部的填充比例
         circle_fill_ratio = (
             area /
             circle_area
         )
-
-        circle_fill_ratio = float(
-            np.clip(
-                circle_fill_ratio,
-                0.0,
-                1.0
-            )
-        )
+        circle_fill_ratio = float(np.clip(circle_fill_ratio, 0.0, 1.0))
 
         # 外接矩形宽高比
         _, _, width, height = (
@@ -361,20 +331,12 @@ class GreenBallDetector:
             min(width, height) /
             max(width, height)
         )
-
-        aspect_ratio_score = float(
-            np.clip(
-                aspect_ratio_score,
-                0.0,
-                1.0
-            )
-        )
+        aspect_ratio_score = float(np.clip(aspect_ratio_score, 0.0, 1.0))
 
         # 凸包填充率
         convex_hull = cv2.convexHull(
             contour
         )
-
         hull_area = cv2.contourArea(
             convex_hull
         )
@@ -386,14 +348,7 @@ class GreenBallDetector:
             )
         else:
             solidity = 0.0
-
-        solidity = float(
-            np.clip(
-                solidity,
-                0.0,
-                1.0
-            )
-        )
+        solidity = float(np.clip(solidity, 0.0, 1.0))
 
         # 圆形形状综合得分
         shape_score = (
@@ -403,16 +358,27 @@ class GreenBallDetector:
             0.10 * solidity
         )
 
+        # 2. 【控制信号优化】计算用于视觉伺服的高质量状态信号
+        M = cv2.moments(contour)
+        if M["m00"] > 0:
+            u = M["m10"] / M["m00"]
+            v = M["m01"] / M["m00"]
+        else:
+            # 极小概率退化，使用外接圆中心兜底
+            u = float(enc_x)
+            v = float(enc_y)
+
+        # 抛弃外接圆半径，使用面积反推等效半径，彻底消除 Z 轴深度的剧烈震荡
+        equivalent_radius = np.sqrt(area / np.pi)
+
         shape_information = {
-            "u": float(center_x),
-            "v": float(center_y),
-            "radius": float(radius),
+            "u": float(u),                          # 替换：平滑质心 u
+            "v": float(v),                          # 替换：平滑质心 v
+            "radius": float(equivalent_radius),     # 替换：平滑等效半径 r
             "area": float(area),
             "circularity": circularity,
-            "circle_fill_ratio":
-                circle_fill_ratio,
-            "aspect_ratio_score":
-                aspect_ratio_score,
+            "circle_fill_ratio": circle_fill_ratio,
+            "aspect_ratio_score": aspect_ratio_score,
             "solidity": solidity,
         }
 
