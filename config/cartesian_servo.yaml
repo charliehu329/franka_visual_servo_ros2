@@ -16,7 +16,7 @@ cartesian_servo_node:
     duration_sec: 0.0
 
     # true只计算和打印，false真实发送
-    dry_run: false
+    dry_run: true
 
     # ROS topics
     joint_state_topic: "/franka/joint_states"
