@@ -140,9 +140,9 @@ class VisualServoLaw(Node):
         self.declare_parameter("hsv_upper")
 
         # 打开USB摄像头
-        # camera_index=3对应/dev/video3
+        # camera_index=2对应/dev/video2
         self.camera = USBCamera(
-            camera_index=3,
+            camera_index=2,
             width=640,
             height=480,
             fps=30

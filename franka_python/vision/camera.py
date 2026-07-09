@@ -52,7 +52,7 @@ class USBCamera:
 
     def __init__(
         self,
-        camera_index=3,
+        camera_index=2,
         width=640,
         height=480,
         fps=30

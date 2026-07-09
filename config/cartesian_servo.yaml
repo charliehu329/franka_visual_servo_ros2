@@ -61,6 +61,10 @@ visual_servo_law:
     # 用于根据图像半径估计目标深度：Z = fR / r
     sphere_radius: 0.01
 
+
+    # 摄像机ID号
+    camera_index: 2
+
     # 检测半径异常时使用的备用深度，单位 m
     initial_depth: 0.5
 
@@ -85,8 +89,8 @@ visual_servo_law:
     # 绿色目标 HSV 范围
     # 顺序为 [H, S, V]
     # =========================
-    hsv_lower: [51, 20, 44]
-    hsv_upper: [90, 251, 200]
+    hsv_lower: [51, 30, 44]
+    hsv_upper: [90, 200, 200]
 
     # =========================
     # XY 平面自适应控制增益
@@ -95,19 +99,19 @@ visual_servo_law:
 
     # 接近目标中心时的最小增益
     # 增大：中心附近回归更快，但可能更容易抖动
-    xy_gain_min: 0.15
+    xy_gain_min: 0.8
 
     # 目标距离中心较远时的最大增益
     # 增大：远距离回归更快
-    xy_gain_max: 0.60
+    xy_gain_max: 1.0
 
     # 增益随误差变化的灵敏程度
     # 增大：更快从最小增益切换到最大增益
-    xy_gain_beta: 6.0
+    xy_gain_beta: 2.0
 
     # 半径误差控制增益，用于控制相机前后运动
     # 只有 enable_depth_control=true 时生效
-    radius_gain: 0.25
+    radius_gain: 0.9
 
     # =========================
     # 深度估计与滤波
@@ -141,16 +145,16 @@ visual_servo_law:
 
     # XY 平面最大合速度，单位 m/s
     # 0.020 表示最大约 2 cm/s
-    max_xy_speed: 0.020
+    max_xy_speed: 0.10
 
     # 相机前后方向最大速度，单位 m/s
     # 0.010 表示最大约 1 cm/s
-    max_z_speed: 0.010
+    max_z_speed: 0.10
 
     # false：只控制小球左右和上下回到目标中心
     # true：同时控制小球半径，即调节相机前后距离
     # 第一次真机测试建议先设为 false
-    enable_depth_control: false
+    enable_depth_control: true
 
     # 未检测到目标时连续补发零速度的次数
     zero_velocity_repeat_count: 5
