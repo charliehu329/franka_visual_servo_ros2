@@ -2,10 +2,12 @@
 """
 green_ball_detector.py
 
+概括：创建GreenBallDetector类，输入图像image,输出视觉特征[u, v, r, Z]。
+
 功能：
     使用传统计算机视觉方法检测RGB图像中的绿色小球。
     通过颜色分割、形态学处理、轮廓提取以及圆度筛选，
-    直接提取目标小球的视觉特征 [u, v, r]，
+    直接提取目标小球的视觉特征 [u, v, r, Z]，
     用于后续视觉伺服控制。
 
 接口：
@@ -24,7 +26,8 @@ green_ball_detector.py
         [
             u,
             v,
-            r
+            r,
+            Z
         ]
 
         其中：
@@ -37,6 +40,9 @@ green_ball_detector.py
             r:
                 球半径，单位为像素。
 
+            Z:
+                根据球半径估计的目标深度，单位为m。
+
         未检测到目标时返回 None。
 
 方法：
@@ -46,6 +52,7 @@ green_ball_detector.py
     4. 提取轮廓并计算圆度。
     5. 根据面积和圆度筛选目标。
     6. 使用最小外接圆计算球心和半径。
+    7. 根据 Z=fR/r 估计目标深度。
 """
 
 import cv2
@@ -59,6 +66,10 @@ class GreenBallDetector:
 
     def __init__(
         self,
+        fx,
+        fy,
+        sphere_radius,
+        initial_depth,
         hsv_lower=(35, 50, 50),
         hsv_upper=(85, 255, 255),
         min_area=100,
@@ -68,6 +79,18 @@ class GreenBallDetector:
         初始化绿色小球检测参数。
 
         输入：
+            fx:
+                相机x方向焦距，单位pixel。
+
+            fy:
+                相机y方向焦距，单位pixel。
+
+            sphere_radius:
+                目标小球真实半径，单位m。
+
+            initial_depth:
+                半径无效时使用的默认深度，单位m。
+
             hsv_lower:
                 HSV绿色区域下限。
 
@@ -81,11 +104,51 @@ class GreenBallDetector:
                 最小圆度阈值。
         """
 
+        self.fx = fx
+        self.fy = fy
+
+        self.sphere_radius = sphere_radius
+        self.initial_depth = initial_depth
+
         self.hsv_lower = np.array(hsv_lower)
         self.hsv_upper = np.array(hsv_upper)
 
         self.min_area = min_area
         self.min_circularity = min_circularity
+
+    def estimate_depth(
+        self,
+        radius
+    ):
+        """
+        根据当前球半径估计目标深度。
+
+        Z = fR / r
+
+        输入：
+            radius:
+                图像球半径，单位pixel。
+
+        输出：
+            Z:
+                目标深度估计，单位m。
+        """
+
+        if radius <= 0:
+            return self.initial_depth
+
+        f = (
+            self.fx +
+            self.fy
+        ) / 2.0
+
+        Z = (
+            f *
+            self.sphere_radius /
+            radius
+        )
+
+        return Z
 
     def detect(self, image):
         """
@@ -97,7 +160,7 @@ class GreenBallDetector:
 
         输出：
             current_feature:
-                检测成功时返回 [u, v, r]；
+                检测成功时返回 [u, v, r, Z]；
                 检测失败时返回 None。
         """
 
@@ -198,12 +261,18 @@ class GreenBallDetector:
                 item["circularity"]
         )
 
-        # 直接返回视觉伺服所需的 [u, v, r]
+        # 根据当前球半径估计目标深度
+        Z = self.estimate_depth(
+            target["r"]
+        )
+
+        # 直接返回视觉伺服所需的 [u, v, r, Z]
         current_feature = np.array(
             [
                 target["u"],
                 target["v"],
-                target["r"]
+                target["r"],
+                Z
             ],
             dtype=float
         )

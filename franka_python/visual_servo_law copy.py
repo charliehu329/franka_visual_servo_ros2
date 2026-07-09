@@ -2,7 +2,7 @@
 """
 visual_servo_law.py
 
-2误差控制6自由度
+2误差控制2自由度：xy自由度
 
 第501行修改：Z=0.5，避免使用检测器输出的Z，防止检测器输出异常值导致伺服速度异常。
 
@@ -658,7 +658,7 @@ class VisualServoLaw(Node):
             desired_feature
         )
 
-        Ls = self.interaction_matrix(
+        """Ls = self.interaction_matrix(
             current_feature,
             Z=0.5
         )
@@ -670,7 +670,31 @@ class VisualServoLaw(Node):
             -self.lambda_gain *
             np.linalg.pinv(Ls) @
             e_uv
+        )"""
+
+        Z_control = 0.5
+
+        Ls = self.interaction_matrix(
+            current_feature,
+            Z=Z_control
         )
+
+        # 只使用球心 u、v 误差
+        e_uv = error[:2]
+
+        # 只取 vx、vy 对应的两列
+        L_xy = Ls[:, :2]
+
+        V_xy = (
+            -self.lambda_gain *
+            np.linalg.pinv(L_xy) @
+            e_uv
+        )
+
+        # 当前阶段只允许相机沿 x、y 平移
+        V_c = np.zeros(6, dtype=float)
+        V_c[0] = V_xy[0]
+        V_c[1] = V_xy[1]
 
         if not np.all(np.isfinite(V_c)):
             self.get_logger().warn(

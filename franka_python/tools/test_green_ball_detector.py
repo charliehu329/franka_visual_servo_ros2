@@ -17,6 +17,22 @@ test_green_ball_detection.py
 
 import cv2
 
+import sys
+from pathlib import Path
+
+# Current file:
+# ~/franka_ros2_ws/src/franka_python/franka_python/tools/test_best_hsv.py
+#
+# Move up to:
+# ~/franka_ros2_ws/src/franka_python
+package_root = Path(__file__).resolve().parents[2]
+
+# Add the package root to Python's module search path
+if str(package_root) not in sys.path:
+    sys.path.insert(0, str(package_root))
+
+
+
 from franka_python.vision.camera import USBCamera
 from franka_python.vision.green_ball_detector import GreenBallDetector
 

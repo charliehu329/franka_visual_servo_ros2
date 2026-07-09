@@ -21,7 +21,26 @@ setup(
         # 安装 config/urdf 目录下的 urdf 文件
         (os.path.join('share', package_name, 'config', 'urdf'),
             glob('config/urdf/*.urdf')),
+
+        # 安装 launch 目录下的 launch.py 文件
+        (
+            os.path.join(
+                "share",
+                package_name,
+                "launch"
+            ),
+            glob("launch/*.launch.py")
+        ),
+        (
+            os.path.join(
+                "share",
+                package_name,
+                "config"
+            ),
+            glob("config/*.yaml")
+        ),
     ],
+    
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='harry',
