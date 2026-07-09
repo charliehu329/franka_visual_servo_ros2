@@ -162,17 +162,17 @@ def generate_launch_description():
     # 但底层控制器还没有准备好的情况。
     # -----------------------------
 
-    delayed_visual_servo_law_node = TimerAction(
+    delayed_cartesian_servo_node = TimerAction(
         period=5.0,
         actions=[
-            visual_servo_law_node,
+            cartesian_servo_node,
         ],
     )
 
-    delayed_cartesian_servo_node = TimerAction(
+    delayed_visual_servo_law_node = TimerAction(
         period=7.0,
         actions=[
-            cartesian_servo_node,
+            visual_servo_law_node,
         ],
     )
 
