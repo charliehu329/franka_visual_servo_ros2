@@ -691,7 +691,6 @@ class CartesianServoNode(Node):
             else:
                 reason = (
                     "Joint state timeout: "
-                    f"{joint_state_age:.3f} s."
                 )
 
             self.enter_safe_stop(reason)
@@ -719,8 +718,6 @@ class CartesianServoNode(Node):
             else:
                 reason = (
                     "Visual velocity timeout: "
-                    f"{visual_velocity_age:.3f} s. "
-                    "Force zero velocity."
                 )
 
             self.enter_safe_stop(reason)
@@ -786,7 +783,8 @@ class CartesianServoNode(Node):
             f"q: "
             f"{np.round(self.current_q, 4).tolist()} | "
             f"q_dot: "
-            f"{np.round(q_dot, 5).tolist()}"
+            f"{np.round(q_dot, 5).tolist()}",
+            throttle_duration_sec=10.0
         )
 
         if not self.dry_run:
@@ -814,7 +812,7 @@ class CartesianServoNode(Node):
         )
 
         if reason != self.safe_stop_reason:
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f"Safety stop: {reason}"
             )
 
