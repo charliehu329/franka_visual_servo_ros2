@@ -41,7 +41,6 @@ cartesian_servo_node:
       0.0, 0.0, 0.0, 1.0
     ]
 
-    visual_velocity_timeout_sec: 0.1
     joint_state_timeout_sec: 0.1
 
 
@@ -67,12 +66,12 @@ visual_servo_law:
     desired_radius: 30.0
 
     # IBVS增益，控制误差转化成速度的比例，大小影响收敛速度和稳定性
-    lambda_gain: -1.0
+    lambda_gain: 1.0
 
     # visual_servo_law输出topic,发布视觉伺服解算的末端执行器速度，供cattesian_servo_node订阅
     visual_velocity_topic: "/visual_servo_velocity"
 
 
     # HSV颜色范围
-    hsv_lower: [50, 40, 44]
+    hsv_lower: [50, 20, 44]
     hsv_upper: [90, 251, 200]
