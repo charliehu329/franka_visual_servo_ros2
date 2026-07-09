@@ -73,5 +73,5 @@ visual_servo_law:
 
 
     # HSV颜色范围
-    hsv_lower: [50, 20, 44]
+    hsv_lower: [51, 20, 44]
     hsv_upper: [90, 251, 200]
