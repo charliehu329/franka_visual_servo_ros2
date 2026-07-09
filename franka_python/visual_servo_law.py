@@ -2,21 +2,20 @@
 """
 visual_servo_law.py
 
-2误差控制6自由度
-
-第501行修改：Z=0.5，避免使用检测器输出的Z，防止检测器输出异常值导致伺服速度异常。
-
-概括：创建VisualServoLaw节点，在节点中创建GreenBallDetector实例。
-输入RGB图像后，检测器输出视觉特征 [u, v, r, Z]，
-视觉伺服律根据当前特征和期望特征计算相机速度 V_c，
-并通过ROS 2 topic发布。
+概括：
+    创建 VisualServoLaw 节点，在节点中创建 GreenBallDetector 实例。
+    检测器输出视觉特征 [u, v, r, Z]，控制器使用球心和半径三个误差，
+    计算相机坐标系下的三维平移速度，并发布 6 维相机速度 V_c。
 
 功能：
-    1. 从ROS 2参数文件读取相机参数、目标参数和期望视觉特征。
-    2. 调用GreenBallDetector检测绿色小球。
-    3. 根据球心特征建立图像雅可比矩阵。
-    4. 使用IBVS控制律计算6维相机速度。
-    5. 发布 /visual_servo_velocity。
+    1. 从 ROS 2 参数文件读取相机参数、目标参数和期望视觉特征。
+    2. 调用 GreenBallDetector 检测绿色小球。
+    3. 使用 u、v、r 三个视觉特征控制相机平移。
+    4. 使用逆深度低通滤波，减小半径波动引起的深度抖动。
+    5. 使用误差相关增益：误差大时回归更快，接近目标时更平稳。
+    6. 对相机平移速度进行限幅。
+    7. 发布 /visual_servo_velocity。
+    8. 图像或目标丢失时连续发布零速度。
 
 接口：
     VisualServoLaw.process_image(image)
@@ -28,61 +27,44 @@ visual_servo_law.py
 
 输入：
     image:
-        RGB相机图像，numpy.ndarray，格式为(H, W, 3)。
+        RGB 相机图像，numpy.ndarray，格式为 (H, W, 3)。
 
     current_feature:
-        检测器输出的当前视觉特征：
+        检测器输出的当前视觉特征 [u, v, r, Z]。
 
-        [
-            u,
-            v,
-            r,
-            Z
-        ]
-
-        u、v：
-            球心像素坐标。
-
-        r：
-            球半径，单位pixel。
-
-        Z：
-            目标深度估计，单位m。
+        u、v：球心像素坐标。
+        r：球半径，单位 pixel。
+        Z：由球半径估计的目标深度，单位 m。
 
     desired_feature:
-        期望视觉特征：
-
-        [
-            u_star,
-            v_star,
-            r_star
-        ]
+        期望视觉特征 [u_star, v_star, r_star]。
 
 输出：
     V_c:
-        6维相机速度：
-
-        [
-            vx,
-            vy,
-            vz,
-            wx,
-            wy,
-            wz
-        ]
+        6 维相机速度 [vx, vy, vz, 0, 0, 0]。
 
 方法：
-    1. 调用绿色小球检测器，获得 [u, v, r, Z]。
-    2. 将u、v像素误差转换为归一化图像坐标误差。
-    3. 使用检测器提供的实时深度Z。
-    4. 建立点特征图像雅可比矩阵Ls。
-    5. 使用IBVS控制律：
+    1. 定义归一化球心误差：
 
-        Vc = -lambda * pinv(Ls) * e
+        e_x = (u - u_star) / fx
+        e_y = (v - v_star) / fy
+
+    2. 定义尺度误差：
+
+        e_r = log(r / r_star)
+
+    3. 对逆深度 rho = 1 / Z 进行低通滤波，得到 Z_hat。
+
+    4. 只控制三个平移自由度：
+
+        vz = -k_r * Z_hat * e_r
+        vx = x * vz + k_xy * Z_hat * e_x
+        vy = y * vz + k_xy * Z_hat * e_y
+
+    5. 角速度固定为零，避免一个球形目标产生不必要的姿态旋转。
 
 说明：
-    当前版本只使用u、v误差控制球心位置。
-    desired_radius已经从YAML读取，但暂未参与控制。
+    lambda_gain 参数仅为兼容旧 YAML 保留，当前三平移控制器不再使用。
 """
 
 import numpy as np
@@ -113,7 +95,18 @@ class VisualServoLaw(Node):
             desired_u
             desired_v
             desired_radius
-            lambda_gain
+            xy_gain_min
+            xy_gain_max
+            xy_gain_beta
+            radius_gain
+            depth_filter_alpha
+            min_depth
+            max_depth
+            pixel_deadband
+            radius_deadband
+            max_xy_speed
+            max_z_speed
+            enable_depth_control
             visual_velocity_topic
         """
 
@@ -148,8 +141,37 @@ class VisualServoLaw(Node):
             fps=30
 )
 
-        # IBVS参数
+        # 旧版参数，仅为兼容现有 YAML 保留。
+        # 当前三平移控制器不再使用 lambda_gain。
         self.declare_parameter("lambda_gain", 0.001)
+
+        # 三平移视觉伺服参数
+        # xy_gain 根据球心误差在最小值和最大值之间自适应变化。
+        self.declare_parameter("xy_gain_min", 0.15)
+        self.declare_parameter("xy_gain_max", 0.60)
+        self.declare_parameter("xy_gain_beta", 6.0)
+
+        # 半径误差控制 Z 方向速度的增益。
+        self.declare_parameter("radius_gain", 0.25)
+
+        # 逆深度低通滤波系数，范围 (0, 1]。
+        # 越小越平滑，越大响应越快。
+        self.declare_parameter("depth_filter_alpha", 0.20)
+
+        # 深度有效范围，超过范围时先限幅再进入滤波。
+        self.declare_parameter("min_depth", 0.20)
+        self.declare_parameter("max_depth", 1.20)
+
+        # 小误差死区，用于减小目标附近抖动。
+        self.declare_parameter("pixel_deadband", 2.0)
+        self.declare_parameter("radius_deadband", 1.0)
+
+        # 相机平移速度限制，单位 m/s。
+        self.declare_parameter("max_xy_speed", 0.020)
+        self.declare_parameter("max_z_speed", 0.010)
+
+        # 是否启用半径误差控制前后距离。
+        self.declare_parameter("enable_depth_control", False)
 
         # 未检测到目标时的零速度连发参数
         # 默认立即发送1次，再以0.01 s间隔补发，共发送5次
@@ -217,9 +239,83 @@ class VisualServoLaw(Node):
                 "three values: [H, S, V]."
             )
 
+        # 读取旧版参数但不再参与当前控制律，
+        # 避免现有 YAML 中保留 lambda_gain 时启动失败。
         self.lambda_gain = float(
             self.get_parameter(
                 "lambda_gain"
+            ).value
+        )
+
+        self.xy_gain_min = float(
+            self.get_parameter(
+                "xy_gain_min"
+            ).value
+        )
+
+        self.xy_gain_max = float(
+            self.get_parameter(
+                "xy_gain_max"
+            ).value
+        )
+
+        self.xy_gain_beta = float(
+            self.get_parameter(
+                "xy_gain_beta"
+            ).value
+        )
+
+        self.radius_gain = float(
+            self.get_parameter(
+                "radius_gain"
+            ).value
+        )
+
+        self.depth_filter_alpha = float(
+            self.get_parameter(
+                "depth_filter_alpha"
+            ).value
+        )
+
+        self.min_depth = float(
+            self.get_parameter(
+                "min_depth"
+            ).value
+        )
+
+        self.max_depth = float(
+            self.get_parameter(
+                "max_depth"
+            ).value
+        )
+
+        self.pixel_deadband = float(
+            self.get_parameter(
+                "pixel_deadband"
+            ).value
+        )
+
+        self.radius_deadband = float(
+            self.get_parameter(
+                "radius_deadband"
+            ).value
+        )
+
+        self.max_xy_speed = float(
+            self.get_parameter(
+                "max_xy_speed"
+            ).value
+        )
+
+        self.max_z_speed = float(
+            self.get_parameter(
+                "max_z_speed"
+            ).value
+        )
+
+        self.enable_depth_control = bool(
+            self.get_parameter(
+                "enable_depth_control"
             ).value
         )
 
@@ -246,6 +342,72 @@ class VisualServoLaw(Node):
                 "must be positive."
             )
 
+        if self.fx <= 0.0 or self.fy <= 0.0:
+            raise ValueError(
+                "fx and fy must be positive."
+            )
+
+        if self.xy_gain_min <= 0.0:
+            raise ValueError(
+                "xy_gain_min must be positive."
+            )
+
+        if self.xy_gain_max < self.xy_gain_min:
+            raise ValueError(
+                "xy_gain_max must be greater than or "
+                "equal to xy_gain_min."
+            )
+
+        if self.xy_gain_beta <= 0.0:
+            raise ValueError(
+                "xy_gain_beta must be positive."
+            )
+
+        if self.radius_gain <= 0.0:
+            raise ValueError(
+                "radius_gain must be positive."
+            )
+
+        if not 0.0 < self.depth_filter_alpha <= 1.0:
+            raise ValueError(
+                "depth_filter_alpha must be in (0, 1]."
+            )
+
+        if self.min_depth <= 0.0:
+            raise ValueError(
+                "min_depth must be positive."
+            )
+
+        if self.max_depth <= self.min_depth:
+            raise ValueError(
+                "max_depth must be greater than min_depth."
+            )
+
+        if self.pixel_deadband < 0.0:
+            raise ValueError(
+                "pixel_deadband must be non-negative."
+            )
+
+        if self.radius_deadband < 0.0:
+            raise ValueError(
+                "radius_deadband must be non-negative."
+            )
+
+        if self.max_xy_speed <= 0.0:
+            raise ValueError(
+                "max_xy_speed must be positive."
+            )
+
+        if self.max_z_speed <= 0.0:
+            raise ValueError(
+                "max_z_speed must be positive."
+            )
+
+        # 保存滤波后的逆深度 rho_hat = 1 / Z_hat。
+        # 第一次有效检测时用测量值初始化。
+        self.filtered_inverse_depth = None
+        self.last_filtered_depth = None
+
         self.desired_feature = np.array(
             [
                 float(
@@ -266,6 +428,11 @@ class VisualServoLaw(Node):
             ],
             dtype=float
         )
+
+        if self.desired_feature[2] <= 0.0:
+            raise ValueError(
+                "desired_radius must be positive."
+            )
 
         visual_velocity_topic = str(
             self.get_parameter(
@@ -336,6 +503,16 @@ class VisualServoLaw(Node):
             f"{self.zero_velocity_repeat_count} messages, "
             f"interval "
             f"{self.zero_velocity_repeat_interval_sec:.3f} s."
+        )
+
+        self.get_logger().info(
+            "Three-translation IBVS: "
+            f"xy_gain=[{self.xy_gain_min:.3f}, "
+            f"{self.xy_gain_max:.3f}], "
+            f"radius_gain={self.radius_gain:.3f}, "
+            f"max_xy={self.max_xy_speed:.3f} m/s, "
+            f"max_z={self.max_z_speed:.3f} m/s, "
+            f"depth_control={self.enable_depth_control}."
         )
 
         # 每秒读取约30帧图像
@@ -478,6 +655,19 @@ class VisualServoLaw(Node):
             thickness=2
         )
 
+        # 绘制期望球半径，便于观察 Z 方向控制目标。
+        desired_radius = int(
+            round(self.desired_feature[2])
+        )
+
+        cv2.circle(
+            display_image,
+            (desired_u, desired_v),
+            desired_radius,
+            (255, 0, 0),
+            1
+        )
+
         # 显示当前检测结果
         cv2.putText(
             display_image,
@@ -514,16 +704,17 @@ class VisualServoLaw(Node):
         desired_feature
     ):
         """
-        计算视觉误差。
+        计算三个无量纲视觉误差。
 
-        current_feature:
-            [u, v, r, Z]
+        输出：
+            error = [e_x, e_y, e_r]
 
-        desired_feature:
-            [u_star, v_star, r_star]
+            e_x = (u - u_star) / fx
+            e_y = (v - v_star) / fy
+            e_r = log(r / r_star)
 
-        图像雅可比矩阵使用归一化图像坐标，
-        因此将u、v像素误差分别除以fx、fy。
+        对球心像素误差和半径误差设置死区，
+        用于减小目标附近的速度抖动。
         """
 
         current_feature = np.asarray(
@@ -547,71 +738,185 @@ class VisualServoLaw(Node):
                 "[u_star, v_star, r_star]。"
             )
 
-        error = (
-            current_feature[:3] -
-            desired_feature
+        current_radius = current_feature[2]
+        desired_radius = desired_feature[2]
+
+        if current_radius <= 0.0:
+            raise ValueError(
+                "Current radius must be positive."
+            )
+
+        if desired_radius <= 0.0:
+            raise ValueError(
+                "Desired radius must be positive."
+            )
+
+        error_u_pixel = (
+            current_feature[0] -
+            desired_feature[0]
         )
 
-        error[0] = error[0] / self.fx
-        error[1] = error[1] / self.fy
+        error_v_pixel = (
+            current_feature[1] -
+            desired_feature[1]
+        )
 
-        return error
+        error_radius_pixel = (
+            current_radius -
+            desired_radius
+        )
 
-    def interaction_matrix(
-        self,
-        feature,
-        Z
-    ):
-        """
-        计算球心点特征的图像雅可比矩阵。
+        if abs(error_u_pixel) <= self.pixel_deadband:
+            error_u_pixel = 0.0
 
-        输入：
-            feature:
-                [u, v, r, Z]
+        if abs(error_v_pixel) <= self.pixel_deadband:
+            error_v_pixel = 0.0
 
-            Z:
-                检测器估计的目标深度，单位m。
+        if (
+            abs(error_radius_pixel) <=
+            self.radius_deadband
+        ):
+            error_radius = 0.0
+        else:
+            error_radius = float(
+                np.log(
+                    current_radius /
+                    desired_radius
+                )
+            )
 
-        输出：
-            L_uv:
-                2x6图像雅可比矩阵。
-        """
-
-        u = feature[0]
-        v = feature[1]
-
-        # 像素坐标转换为归一化图像坐标
-        x = (
-            u - self.cx
-        ) / self.fx
-
-        y = (
-            v - self.cy
-        ) / self.fy
-
-        L_uv = np.array(
+        error = np.asarray(
             [
-                [
-                    -1.0 / Z,
-                    0.0,
-                    x / Z,
-                    x * y,
-                    -(1.0 + x * x),
-                    y
-                ],
-                [
-                    0.0,
-                    -1.0 / Z,
-                    y / Z,
-                    1.0 + y * y,
-                    -x * y,
-                    -x
-                ]
+                error_u_pixel / self.fx,
+                error_v_pixel / self.fy,
+                error_radius,
             ],
             dtype=float
         )
 
-        return L_uv
+        return error
+
+    def filter_depth(
+        self,
+        measured_depth
+    ):
+        """
+        对逆深度 rho = 1 / Z 进行一阶低通滤波。
+
+        使用逆深度而不是直接滤波 Z，原因是图像雅可比矩阵
+        的平移部分对 1 / Z 线性。
+        """
+
+        measured_depth = float(
+            np.clip(
+                measured_depth,
+                self.min_depth,
+                self.max_depth
+            )
+        )
+
+        measured_inverse_depth = (
+            1.0 / measured_depth
+        )
+
+        if self.filtered_inverse_depth is None:
+            self.filtered_inverse_depth = (
+                measured_inverse_depth
+            )
+        else:
+            alpha = self.depth_filter_alpha
+
+            self.filtered_inverse_depth = (
+                (1.0 - alpha) *
+                self.filtered_inverse_depth +
+                alpha *
+                measured_inverse_depth
+            )
+
+        filtered_depth = (
+            1.0 /
+            self.filtered_inverse_depth
+        )
+
+        filtered_depth = float(
+            np.clip(
+                filtered_depth,
+                self.min_depth,
+                self.max_depth
+            )
+        )
+
+        self.last_filtered_depth = filtered_depth
+
+        return filtered_depth
+
+    def compute_xy_gain(
+        self,
+        error_x,
+        error_y
+    ):
+        """
+        根据球心误差计算自适应平移增益。
+
+        误差大时接近 xy_gain_max，回归更快；
+        误差小时接近 xy_gain_min，减小目标附近抖动。
+        """
+
+        center_error_norm = float(
+            np.hypot(
+                error_x,
+                error_y
+            )
+        )
+
+        gain = (
+            self.xy_gain_min +
+            (
+                self.xy_gain_max -
+                self.xy_gain_min
+            ) *
+            np.tanh(
+                self.xy_gain_beta *
+                center_error_norm
+            )
+        )
+
+        return float(gain)
+
+    def limit_translation_velocity(
+        self,
+        vx,
+        vy,
+        vz
+    ):
+        """
+        对相机平移速度进行限幅。
+
+        x-y 平面按合速度限幅，z 方向单独限幅。
+        """
+
+        planar_speed = float(
+            np.hypot(vx, vy)
+        )
+
+        if planar_speed > self.max_xy_speed:
+            scale = (
+                self.max_xy_speed /
+                planar_speed
+            )
+
+            vx *= scale
+            vy *= scale
+
+        vz = float(
+            np.clip(
+                vz,
+                -self.max_z_speed,
+                self.max_z_speed
+            )
+        )
+
+        return float(vx), float(vy), vz
 
     def compute_velocity(
         self,
@@ -619,7 +924,13 @@ class VisualServoLaw(Node):
         desired_feature
     ):
         """
-        根据当前视觉特征计算IBVS相机速度。
+        根据球心和半径三个视觉误差计算相机速度。
+
+        当前控制器只输出相机平移速度：
+            V_c = [vx, vy, vz, 0, 0, 0]
+
+        这样可以避免使用一个球形目标时，
+        2 个球心误差通过伪逆被分配到多个旋转自由度。
         """
 
         current_feature = np.asarray(
@@ -636,40 +947,131 @@ class VisualServoLaw(Node):
             )
             return np.zeros(6, dtype=float)
 
-        Z = current_feature[3]
-
-        if (
-            not np.all(
-                np.isfinite(current_feature)
-            )
-            or Z <= 0.0
+        if not np.all(
+            np.isfinite(current_feature)
         ):
             self.get_logger().warn(
                 "Invalid visual feature. "
                 "Publishing zero velocity."
             )
             self.request_zero_velocity_burst(
-                "Visual feature contains invalid values."
+                "Visual feature contains nan or inf."
             )
             return np.zeros(6, dtype=float)
 
-        error = self.compute_error(
-            current_feature,
-            desired_feature
+        measured_depth = float(
+            current_feature[3]
         )
 
-        Ls = self.interaction_matrix(
-            current_feature,
-            Z=0.5
+        if (
+            current_feature[2] <= 0.0 or
+            measured_depth <= 0.0
+        ):
+            self.get_logger().warn(
+                "Invalid radius or depth. "
+                "Publishing zero velocity."
+            )
+            self.request_zero_velocity_burst(
+                "Visual radius or depth is not positive."
+            )
+            return np.zeros(6, dtype=float)
+
+        try:
+            error = self.compute_error(
+                current_feature,
+                desired_feature
+            )
+
+            filtered_depth = self.filter_depth(
+                measured_depth
+            )
+
+        except ValueError as error_message:
+            self.request_zero_velocity_burst(
+                f"Failed to compute visual error: "
+                f"{error_message}"
+            )
+            return np.zeros(6, dtype=float)
+
+        error_x = float(error[0])
+        error_y = float(error[1])
+        error_radius = float(error[2])
+
+        # 当前球心的归一化图像坐标。
+        x = (
+            current_feature[0] -
+            self.cx
+        ) / self.fx
+
+        y = (
+            current_feature[1] -
+            self.cy
+        ) / self.fy
+
+        xy_gain = self.compute_xy_gain(
+            error_x,
+            error_y
         )
 
-        # 当前版本只使用u、v误差
-        e_uv = error[:2]
+        if self.enable_depth_control:
+            # r = fR/Z，因此 d(log(r))/dt = vz/Z。
+            # 令 d(e_r)/dt = -k_r e_r，得到：
+            # vz = -k_r Z e_r。
+            vz = (
+                -self.radius_gain *
+                filtered_depth *
+                error_radius
+            )
+        else:
+            vz = 0.0
 
-        V_c = (
-            -self.lambda_gain *
-            np.linalg.pinv(Ls) @
-            e_uv
+        # 必须先限制 vz，再计算 x、y 方向的耦合补偿。
+        # 否则 vx、vy 会按照未限幅的 vz 计算，而最终发布的 vz
+        # 已被限幅，造成补偿量不一致。
+        vz = float(
+            np.clip(
+                vz,
+                -self.max_z_speed,
+                self.max_z_speed
+            )
+        )
+
+        # 点特征平移动力学：
+        # dx/dt = -vx/Z + x*vz/Z
+        # dy/dt = -vy/Z + y*vz/Z
+        # 令 dx/dt = -k*e_x、dy/dt = -k*e_y，得到：
+        # vx = x*vz + k*Z*e_x
+        # vy = y*vz + k*Z*e_y
+        vx = (
+            x * vz +
+            xy_gain *
+            filtered_depth *
+            error_x
+        )
+
+        vy = (
+            y * vz +
+            xy_gain *
+            filtered_depth *
+            error_y
+        )
+
+        vx, vy, vz = self.limit_translation_velocity(
+            vx,
+            vy,
+            vz
+        )
+
+        V_c = np.asarray(
+            [
+                vx,
+                vy,
+                vz,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            dtype=float
         )
 
         if not np.all(np.isfinite(V_c)):
@@ -699,6 +1101,22 @@ class VisualServoLaw(Node):
         msg.data = V_c.tolist()
 
         self.velocity_publisher.publish(msg)
+
+        self.get_logger().info(
+            "feature="
+            f"[{current_feature[0]:.1f}, "
+            f"{current_feature[1]:.1f}, "
+            f"{current_feature[2]:.1f}] | "
+            "error="
+            f"[{error_x:.4f}, "
+            f"{error_y:.4f}, "
+            f"{error_radius:.4f}] | "
+            f"Z_hat={filtered_depth:.3f} m | "
+            f"k_xy={xy_gain:.3f} | "
+            "V_c="
+            f"{np.round(V_c, 4).tolist()}",
+            throttle_duration_sec=2.0
+        )
 
         return V_c
 
