@@ -125,12 +125,13 @@ def generate_launch_description():
         output="screen",
         emulate_tty=True,
         parameters=[
+            visual_params_file,
             {
                 "dry_run": ParameterValue(
                     dry_run,
                     value_type=bool,
                 )
-            }
+            },
         ],
     )
 

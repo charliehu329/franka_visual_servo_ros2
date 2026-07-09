@@ -96,7 +96,7 @@ class FrankaKinematics:
             self.data,
             q_full,
             self.frame_id,
-            pin.ReferenceFrame.LOCAL_WORLD_ALIGNED,
+            pin.ReferenceFrame.LOCAL,
         )
 
         J_arm = J_full[:, self.arm_v_indices]

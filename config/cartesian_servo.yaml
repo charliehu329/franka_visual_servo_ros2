@@ -16,11 +16,15 @@ cartesian_servo_node:
     duration_sec: 0.0
 
     # true只计算和打印，false真实发送
-    dry_run: true
+    dry_run: false
 
-    # ROS topics
+    # ROS topic配置
+    # cattesian_servo_node订阅的关节状态topic，获取当前关节角度，
+    # 传给雅可比矩阵，从末端执行器速度解算关节速度
     joint_state_topic: "/franka/joint_states"
+    # cattesian_servo_node发布的关节速度topic，供franka_ros2控制器订阅
     command_topic: "/velocity_command_node/target_velocities"
+    # cattesian_servo_node订阅的末端执行器速度，visual_servo_law发布topic
     visual_velocity_topic: "/visual_servo_velocity"
 
     # 单关节速度限幅
@@ -65,10 +69,10 @@ visual_servo_law:
     # IBVS增益，控制误差转化成速度的比例，大小影响收敛速度和稳定性
     lambda_gain: -1.0
 
-    # 输出topic
+    # visual_servo_law输出topic,发布视觉伺服解算的末端执行器速度，供cattesian_servo_node订阅
     visual_velocity_topic: "/visual_servo_velocity"
 
 
     # HSV颜色范围
-    hsv_lower: [50, 10, 44]
-    hsv_upper: [90, 251, 255]
+    hsv_lower: [50, 40, 44]
+    hsv_upper: [90, 251, 200]
