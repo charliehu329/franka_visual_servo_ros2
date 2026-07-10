@@ -43,6 +43,9 @@ cartesian_servo_node:
 
     joint_state_timeout_sec: 0.1
 
+    #关节加速度限幅，单位 rad/s^2
+    max_joint_acceleration: 0.1
+
 
 
 
