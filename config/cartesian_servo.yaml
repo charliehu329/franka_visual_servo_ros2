@@ -7,7 +7,7 @@ cartesian_servo_node:
     end_effector_frame: "fr3_hand_tcp"
 
     # 阻尼最小二乘参数
-    damping: 0.05
+    damping: 0.02
 
     # 控制频率
     publish_rate_hz: 50.0
