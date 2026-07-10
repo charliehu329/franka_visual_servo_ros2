@@ -63,7 +63,7 @@ visual_servo_law:
 
 
     # 摄像机ID号
-    camera_index: 2
+    camera_index: 3
 
     # 检测半径异常时使用的备用深度，单位 m
     initial_depth: 0.5
@@ -154,7 +154,7 @@ visual_servo_law:
     # false：只控制小球左右和上下回到目标中心
     # true：同时控制小球半径，即调节相机前后距离
     # 第一次真机测试建议先设为 false
-    enable_depth_control: true
+    enable_depth_control: false
 
     # 未检测到目标时连续补发零速度的次数
     zero_velocity_repeat_count: 5

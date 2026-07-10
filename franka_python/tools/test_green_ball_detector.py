@@ -39,7 +39,7 @@ from franka_python.vision.green_ball_detector import GreenBallDetector
 
 def main():
     camera = USBCamera(
-        camera_index=3,
+        camera_index=2,
         width=640,
         height=480,
         fps=30
