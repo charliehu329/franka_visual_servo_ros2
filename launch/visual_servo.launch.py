@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+当前版本为能追踪快速物体完整版本V1.0
 visual_servo.launch.py
 
 功能：
