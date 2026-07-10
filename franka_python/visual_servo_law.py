@@ -132,7 +132,7 @@ class VisualServoLaw(Node):
         self.declare_parameter("hsv_lower")
         self.declare_parameter("hsv_upper")
 
-        # 摄像头设备编号，通常 0 对应 /dev/video0，1 对应 /dev/video1
+        # 摄像头设备编号，通常 0 对应 /dev/video0，1 对应 /dev/video1，由yaml里得到
         self.declare_parameter("camera_index", 2)
 
         # 打开USB摄像头

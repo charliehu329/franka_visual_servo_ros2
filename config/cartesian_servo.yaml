@@ -44,7 +44,7 @@ cartesian_servo_node:
     joint_state_timeout_sec: 0.1
 
     #关节加速度限幅，单位 rad/s^2
-    max_joint_acceleration: 0.1
+    max_joint_acceleration: 0.2
 
 
 
@@ -66,7 +66,12 @@ visual_servo_law:
 
 
     # 摄像机ID号
-    camera_index: 3
+    # 查看视频设备的ID
+    # ls -l /dev/video*
+    # 具体查看
+    # v4l2-ctl --list-devices
+
+    camera_index: 0
 
     # 检测半径异常时使用的备用深度，单位 m
     initial_depth: 0.5
@@ -106,7 +111,7 @@ visual_servo_law:
 
     # 目标距离中心较远时的最大增益
     # 增大：远距离回归更快
-    xy_gain_max: 1.0
+    xy_gain_max: 2.0
 
     # 增益随误差变化的灵敏程度
     # 增大：更快从最小增益切换到最大增益

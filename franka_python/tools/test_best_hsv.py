@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
+查看视频设备的ID
+ls -l /dev/video*
+具体查看
+v4l2-ctl --list-devices
+"""
+camera_index=0
+
+"""
 test_green_ball_detection.py
+
+注意，在文件开头单独设置camera_index，和yaml文件不一样。
 
 功能：
     1. 测试 USB 相机和 GreenBallDetector 是否能够识别绿色小球。
@@ -417,7 +427,7 @@ def draw_sample_points(
 
 def main():
     camera = USBCamera(
-        camera_index=3,
+        camera_index=camera_index,
         width=640,
         height=480,
         fps=30

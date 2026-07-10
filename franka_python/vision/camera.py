@@ -52,7 +52,7 @@ class USBCamera:
 
     def __init__(
         self,
-        camera_index=3,
+        camera_index=3, #默认相机ID,在创建实例的时候传入新的ID
         width=640,
         height=480,
         fps=30

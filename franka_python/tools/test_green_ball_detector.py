@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+
+"""
+查看视频设备的ID
+ls -l /dev/video*
+具体查看
+v4l2-ctl --list-devices
+"""
+camera_index=0
+
 """
 test_green_ball_detection.py
 
@@ -39,7 +48,7 @@ from franka_python.vision.green_ball_detector import GreenBallDetector
 
 def main():
     camera = USBCamera(
-        camera_index=2,
+        camera_index=camera_index,
         width=640,
         height=480,
         fps=30
