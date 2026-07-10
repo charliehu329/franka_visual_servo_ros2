@@ -13,12 +13,13 @@ cartesian_servo_node.py
     2. 订阅视觉伺服速度 V_c。
     3. 将相机速度转换为末端执行器速度。
     4. 根据雅可比矩阵将末端速度转换为关节速度。
-    5. 对关节速度进行有限值检查和限幅。
-    6. 发布关节速度给 Franka。
-    7. 视觉速度超时后强制发布零速度。
-    8. 关节状态超时后强制发布零速度。
-    9. 收到错误、无效或非有限速度时强制发布零速度。
-    10. 节点退出前发布零速度。
+    5. 对目标关节速度进行有限值检查和绝对值限幅。
+    6. 对连续关节速度命令进行加速度限制，避免速度突变。
+    7. 发布平滑后的关节速度给 Franka。
+    8. 视觉速度超时后平滑减速到零。
+    9. 关节状态超时后平滑减速到零。
+    10. 收到错误、无效或非有限速度时平滑减速到零。
+    11. 节点退出前尝试平滑减速到零。
 
 接口：
     joint_state_callback(msg)
@@ -40,16 +41,21 @@ cartesian_servo_node.py
 
 安全机制：
     1. visual_velocity_timeout_sec：
-       超过该时间未收到新的视觉速度，立即发送零关节速度。
+       超过该时间未收到新的视觉速度，将目标关节速度设为零。
 
     2. joint_state_timeout_sec：
-       超过该时间未收到新的关节状态，立即发送零关节速度。
+       超过该时间未收到新的关节状态，将目标关节速度设为零。
 
-    3. visual_servo_law 没有识别到目标时应持续发布零相机速度。
+    3. max_joint_acceleration：
+       限制相邻控制周期的关节速度变化量，避免非零速度与零速度
+       或正负速度之间直接跳变。
+
+    4. visual_servo_law 没有识别到目标时应持续发布零相机速度。
 
 说明：
-    本节点不在代码中设置运动控制参数默认值。
-    所有参数必须从 YAML 文件或命令行提供。
+    原有运动参数仍由 YAML 或命令行提供。
+    新增 max_joint_acceleration 默认值用于兼容旧 YAML，
+    正式运行时建议在 YAML 中明确设置。
 """
 
 import numpy as np
@@ -96,7 +102,18 @@ class CartesianServoNode(Node):
         # Topic 和速度限制
         self.declare_parameter("joint_state_topic")
         self.declare_parameter("command_topic")
+        self.declare_parameter(
+            "visual_velocity_topic",
+            "/visual_servo_velocity"
+        )
         self.declare_parameter("max_joint_velocity")
+
+        # 相邻控制周期之间允许的最大关节速度变化率。
+        # 单位 rad/s^2。保守默认值用于兼容旧 YAML。
+        self.declare_parameter(
+            "max_joint_acceleration",
+            0.20
+        )
 
         # 安全超时参数
         self.declare_parameter(
@@ -183,10 +200,22 @@ class CartesianServoNode(Node):
             )
         )
 
+        self.visual_velocity_topic = str(
+            self.get_parameter(
+                "visual_velocity_topic"
+            ).value
+        )
+
         self.max_joint_velocity = float(
             self.get_required_parameter(
                 "max_joint_velocity"
             )
+        )
+
+        self.max_joint_acceleration = float(
+            self.get_parameter(
+                "max_joint_acceleration"
+            ).value
         )
 
         self.visual_velocity_timeout_sec = float(
@@ -224,6 +253,19 @@ class CartesianServoNode(Node):
         # 用来避免在每个定时器周期重复打印相同警告
         self.safe_stop_reason = None
 
+        # 已经实际发布的关节速度命令。
+        # 后续所有目标速度都从该状态平滑逼近，不能直接跳变。
+        self.commanded_q_dot = np.zeros(
+            7,
+            dtype=float
+        )
+
+        # 上一次执行速度变化率限制的时间。
+        self.last_command_time = None
+
+        # 控制时间到达后，先平滑减速到零，再关闭节点。
+        self.duration_stop_requested = False
+
         # =====================================================
         # 初始化运动学模型
         # =====================================================
@@ -251,7 +293,7 @@ class CartesianServoNode(Node):
         self.visual_velocity_sub = (
             self.create_subscription(
                 Float64MultiArray,
-                "/visual_servo_velocity",
+                self.visual_velocity_topic,
                 self.visual_velocity_callback,
                 10
             )
@@ -299,7 +341,7 @@ class CartesianServoNode(Node):
 
         self.get_logger().info(
             "Visual velocity topic: "
-            "/visual_servo_velocity"
+            f"{self.visual_velocity_topic}"
         )
 
         self.get_logger().info(
@@ -323,6 +365,11 @@ class CartesianServoNode(Node):
         self.get_logger().info(
             "Max joint velocity: "
             f"{self.max_joint_velocity} rad/s"
+        )
+
+        self.get_logger().info(
+            "Max joint acceleration: "
+            f"{self.max_joint_acceleration} rad/s^2"
         )
 
         self.get_logger().info(
@@ -367,6 +414,11 @@ class CartesianServoNode(Node):
         if self.max_joint_velocity <= 0.0:
             raise ValueError(
                 "max_joint_velocity must be positive."
+            )
+
+        if self.max_joint_acceleration <= 0.0:
+            raise ValueError(
+                "max_joint_acceleration must be positive."
             )
 
         if (
@@ -633,11 +685,177 @@ class CartesianServoNode(Node):
 
         return is_fresh, age_sec
 
+    def compute_limiter_dt(
+        self,
+        now
+    ):
+        """
+        计算本次速度变化率限制使用的时间间隔。
+
+        当 Python 定时器偶尔延迟时，不允许因为 dt 变大而
+        一次性跨越更大的速度步长，因此 dt 最大不超过标称周期。
+        """
+
+        nominal_dt = (
+            1.0 /
+            self.publish_rate_hz
+        )
+
+        if self.last_command_time is None:
+            dt = nominal_dt
+        else:
+            dt = (
+                now -
+                self.last_command_time
+            ).nanoseconds * 1e-9
+
+            if (
+                not np.isfinite(dt)
+                or dt <= 0.0
+            ):
+                dt = nominal_dt
+
+            # 定时器卡顿后仍只允许走一个正常周期的速度增量。
+            dt = min(
+                float(dt),
+                nominal_dt
+            )
+
+        self.last_command_time = now
+
+        return max(
+            float(dt),
+            1e-6
+        )
+
+    def limit_joint_velocity_change(
+        self,
+        target_q_dot,
+        dt
+    ):
+        """
+        限制相邻两次关节速度命令的变化量。
+
+        输入：
+            target_q_dot:
+                已经过绝对速度限幅的目标关节速度。
+
+            dt:
+                本次控制时间间隔，单位 s。
+
+        输出：
+            commanded_q_dot:
+                可以安全发布的平滑关节速度。
+
+        方法：
+            |q_dot[k] - q_dot[k-1]|
+                <= max_joint_acceleration * dt
+        """
+
+        target_q_dot = np.asarray(
+            target_q_dot,
+            dtype=float
+        ).reshape(7)
+
+        target_q_dot = check_finite_vector(
+            target_q_dot,
+            "target_q_dot"
+        )
+
+        target_q_dot = limit_joint_velocity(
+            target_q_dot,
+            max_abs=self.max_joint_velocity
+        )
+
+        max_delta = (
+            self.max_joint_acceleration *
+            float(dt)
+        )
+
+        delta_q_dot = (
+            target_q_dot -
+            self.commanded_q_dot
+        )
+
+        delta_q_dot = np.clip(
+            delta_q_dot,
+            -max_delta,
+            max_delta
+        )
+
+        commanded_q_dot = (
+            self.commanded_q_dot +
+            delta_q_dot
+        )
+
+        # 防止浮点累计误差突破绝对速度上限。
+        commanded_q_dot = limit_joint_velocity(
+            commanded_q_dot,
+            max_abs=self.max_joint_velocity
+        )
+
+        # 接近零目标且已经足够小时，明确归零，避免残留极小命令。
+        zero_target = np.allclose(
+            target_q_dot,
+            0.0,
+            atol=1e-12
+        )
+
+        if (
+            zero_target
+            and np.max(
+                np.abs(commanded_q_dot)
+            ) <= max_delta
+        ):
+            commanded_q_dot = np.zeros(
+                7,
+                dtype=float
+            )
+
+        self.commanded_q_dot = commanded_q_dot
+
+        return commanded_q_dot.copy()
+
+    def publish_joint_velocity(
+        self,
+        target_q_dot,
+        now=None
+    ):
+        """
+        将目标关节速度经过变化率限制后发布。
+
+        正常速度、目标丢失、消息超时和退出停止都必须调用
+        本函数，不能绕过限制器直接发布七维零速度。
+        """
+
+        if now is None:
+            now = self.get_clock().now()
+
+        dt = self.compute_limiter_dt(now)
+
+        commanded_q_dot = (
+            self.limit_joint_velocity_change(
+                target_q_dot,
+                dt
+            )
+        )
+
+        if not self.dry_run:
+            message = Float64MultiArray()
+            message.data = (
+                commanded_q_dot.tolist()
+            )
+
+            self.publisher.publish(message)
+
+        return commanded_q_dot
+
     def timer_callback(self):
         """
         周期计算并发送关节速度。
 
-        任何输入失效时，立即进入零速度状态。
+        任何输入失效时，把目标速度设为零，但实际发布速度仍然
+        经过 max_joint_acceleration 限制平滑下降，禁止直接跳零。
         """
 
         now = self.get_clock().now()
@@ -647,6 +865,11 @@ class CartesianServoNode(Node):
             self.start_time
         ).nanoseconds * 1e-9
 
+        zero_q_dot = np.zeros(
+            7,
+            dtype=float
+        )
+
         # =====================================================
         # 控制持续时间检查
         # =====================================================
@@ -655,15 +878,29 @@ class CartesianServoNode(Node):
             self.duration_sec > 0.0
             and elapsed >= self.duration_sec
         ):
+            self.duration_stop_requested = True
             self.enter_safe_stop(
                 "Control duration reached."
             )
 
-            self.get_logger().info(
-                "Duration reached. Stop."
+            commanded_q_dot = (
+                self.publish_joint_velocity(
+                    zero_q_dot,
+                    now=now
+                )
             )
 
-            rclpy.shutdown()
+            if np.allclose(
+                commanded_q_dot,
+                0.0,
+                atol=1e-12
+            ):
+                self.get_logger().info(
+                    "Duration reached and joint "
+                    "velocity ramped to zero. Stop."
+                )
+                rclpy.shutdown()
+
             return
 
         # =====================================================
@@ -691,9 +928,14 @@ class CartesianServoNode(Node):
             else:
                 reason = (
                     "Joint state timeout: "
+                    f"{joint_state_age:.3f} s."
                 )
 
             self.enter_safe_stop(reason)
+            self.publish_joint_velocity(
+                zero_q_dot,
+                now=now
+            )
             return
 
         # =====================================================
@@ -718,12 +960,17 @@ class CartesianServoNode(Node):
             else:
                 reason = (
                     "Visual velocity timeout: "
+                    f"{visual_velocity_age:.3f} s."
                 )
 
             self.enter_safe_stop(reason)
+            self.publish_joint_velocity(
+                zero_q_dot,
+                now=now
+            )
             return
 
-        # 两类数据都恢复后，清除安全停止状态
+        # 两类数据都恢复后，清除安全停止状态。
         if self.safe_stop_reason is not None:
             self.get_logger().info(
                 "Joint state and visual velocity "
@@ -733,7 +980,7 @@ class CartesianServoNode(Node):
             self.safe_stop_reason = None
 
         # =====================================================
-        # 计算关节速度
+        # 计算目标关节速度
         # =====================================================
 
         try:
@@ -757,7 +1004,7 @@ class CartesianServoNode(Node):
                     "Jacobian contains nan or inf."
                 )
 
-            q_dot = (
+            target_q_dot = (
                 cartesian_velocity_to_joint_velocity(
                     V_e=self.V_e,
                     J=J,
@@ -765,10 +1012,17 @@ class CartesianServoNode(Node):
                 )
             )
 
-            q_dot = limit_joint_velocity(
-                q_dot,
+            target_q_dot = limit_joint_velocity(
+                target_q_dot,
                 max_abs=(
                     self.max_joint_velocity
+                )
+            )
+
+            commanded_q_dot = (
+                self.publish_joint_velocity(
+                    target_q_dot,
+                    now=now
                 )
             )
 
@@ -777,21 +1031,21 @@ class CartesianServoNode(Node):
                 "Failed to compute safe joint "
                 f"velocity: {error}"
             )
+            self.publish_joint_velocity(
+                zero_q_dot,
+                now=now
+            )
             return
 
         self.get_logger().info(
             f"q: "
             f"{np.round(self.current_q, 4).tolist()} | "
-            f"q_dot: "
-            f"{np.round(q_dot, 5).tolist()}",
+            "q_dot_target: "
+            f"{np.round(target_q_dot, 5).tolist()} | "
+            "q_dot_cmd: "
+            f"{np.round(commanded_q_dot, 5).tolist()}",
             throttle_duration_sec=10.0
         )
-
-        if not self.dry_run:
-            message = Float64MultiArray()
-            message.data = q_dot.tolist()
-
-            self.publisher.publish(message)
 
     def enter_safe_stop(
         self,
@@ -800,10 +1054,9 @@ class CartesianServoNode(Node):
         """
         进入安全停止状态。
 
-        操作：
-            1. 清除内部末端速度。
-            2. 发布七维零关节速度。
-            3. 仅在停止原因变化时打印警告。
+        本函数只把末端目标速度清零并记录停止原因。
+        真正发送给机器人的关节速度由 timer_callback 中的
+        publish_joint_velocity() 平滑减小到零。
         """
 
         self.V_e = np.zeros(
@@ -818,16 +1071,12 @@ class CartesianServoNode(Node):
 
             self.safe_stop_reason = reason
 
-        # 在每个控制周期持续发送零速度，
-        # 避免底层保留之前的非零命令。
-        self.publish_zero_velocity()
-
     def publish_zero_velocity(self):
         """
-        发布七维零关节速度。
+        请求关节速度平滑下降到零，并发布一个限幅后的控制步。
 
-        dry_run=True 时只清除内部速度，
-        不向实际控制话题发送消息。
+        注意：这里故意不再直接发布 [0.0] * 7，
+        以避免非零速度命令突然跳变为零。
         """
 
         self.V_e = np.zeros(
@@ -835,13 +1084,13 @@ class CartesianServoNode(Node):
             dtype=float
         )
 
-        if self.dry_run:
-            return
+        return self.publish_joint_velocity(
+            np.zeros(
+                7,
+                dtype=float
+            )
+        )
 
-        message = Float64MultiArray()
-        message.data = [0.0] * 7
-
-        self.publisher.publish(message)
 
 
 def main(args=None):
@@ -874,7 +1123,7 @@ def main(args=None):
 
     finally:
         # 只要 ROS 上下文仍有效，
-        # 在退出节点前再发送一次零速度。
+        # 在退出节点前再发送一个平滑减速控制步。
         if node is not None:
             if rclpy.ok():
                 node.publish_zero_velocity()
