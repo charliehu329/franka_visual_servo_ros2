@@ -1,6 +1,6 @@
 cartesian_servo_node:
   ros__parameters:
-    # FR3机器人URDF
+    # FR3机器人URDF,改为自己的urdf路径
     urdf_path: "/home/harry/franka_ros2_ws/src/franka_python/config/urdf/fr3.urdf"
 
     # 末端执行器坐标系
