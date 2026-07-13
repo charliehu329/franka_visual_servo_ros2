@@ -529,6 +529,16 @@ class CartesianServoNode(Node):
         输入：
             msg.data:
                 V_c = [vx, vy, vz, wx, wy, wz]
+                相机坐标系下的速度。
+
+                
+        输出：
+            self.V_e:
+                V_e = [vx, vy, vz, wx, wy, wz]
+                在末端执行器坐标系下表达。
+
+                V_e = (self.camera_velocity_to_end_effector_velocity(V_c)
+                
 
         说明：
             视觉节点没有检测到目标时，
