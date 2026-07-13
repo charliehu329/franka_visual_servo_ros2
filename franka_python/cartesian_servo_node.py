@@ -2,6 +2,40 @@
 """
 cartesian_servo_node.py
 
+
+ros run franka_python cartesian_servo_node 
+--ros-args 
+-p urdf_path:="/home/harry/franka_ros2_ws/src/franka_python/config/urdf/fr3.urdf" 
+-p end_effector_frame:="fr3_link8" 
+-p T_end_effector_camera:="[0.0, 0.0, 1.0, 0.0,
+                             0.0, -1.0, 0.0, 0.0, 
+                             1.0, 0.0, 0.0, 0.05,       
+                             0.0, 0.0, 0.0, 1.0]" 
+-p damping:=0.02 
+-p publish_rate_hz:=100 
+-p duration_sec:=60 
+-p dry_run:=false 
+-p joint_state_topic:="/joint_states" 
+-p command_topic:="/velocity_command_node/target_velocities" 
+-p visual_velocity_topic:="/camera_velocity" 
+-p max_joint_velocity:=0.05 
+-p max_joint_acceleration:=1.5 
+-p visual_velocity_timeout_sec:=1.5 
+-p joint_state_timeout_sec:=1.5
+
+发送相机速度
+ros2 topic pub -r 30 \
+  /camera_velocity \
+  std_msgs/msg/Float64MultiArray \
+  "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
+
+ros2 topic pub --once \
+  /camera_velocity \
+  std_msgs/msg/Float64MultiArray \
+  "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
+
+
+
 概括：
     创建 CartesianServoNode 节点。
     接收视觉伺服节点发布的相机速度 V_c，将其转换为末端速度 V_e，
