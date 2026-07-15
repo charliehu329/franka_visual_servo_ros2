@@ -1,4 +1,4 @@
-cartesian_servo_node:
+cartesian_servo_node: # 末端执行器速度控制节点
   ros__parameters:
     # FR3机器人URDF,改为自己的urdf路径
     urdf_path: "/home/harry/franka_ros2_ws/src/franka_python/config/urdf/fr3.urdf"
