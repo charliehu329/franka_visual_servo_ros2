@@ -865,6 +865,7 @@ class VisualServoLaw(Node):
         误差小时接近 xy_gain_min，减小目标附近抖动。
         """
 
+        # x,y的平方和开根，得到球心误差的欧几里得范数。
         center_error_norm = float(
             np.hypot(
                 error_x,
